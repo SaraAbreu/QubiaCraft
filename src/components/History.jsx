@@ -3,6 +3,7 @@ import './History.css';
 
 const STATUS_LABEL = {
   pending: { label: 'Pendiente', cls: 'badge-pending' },
+  scheduled: { label: 'Programado', cls: 'badge-scheduled' },
   published: { label: 'Publicado', cls: 'badge-published' },
   published_demo: { label: 'Aprobado (demo)', cls: 'badge-demo' },
   rejected: { label: 'Rechazado', cls: 'badge-rejected' },
@@ -14,6 +15,25 @@ export default function History() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  async function cancelSchedule(item) {
+    setCancelling(true);
+    try {
+      const res = await fetch('/api/unschedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id })
+      });
+      if (res.ok) {
+        const updated = { ...item, status: 'pending', scheduledFor: null };
+        setItems(list => list.map(i => (i.id === item.id ? updated : i)));
+        setSelected(updated);
+      }
+    } finally {
+      setCancelling(false);
+    }
+  }
 
   useEffect(() => {
     fetch('/api/history')
@@ -60,7 +80,13 @@ export default function History() {
                 <img src={item.image} alt="" className="history-thumb" />
                 <div className="history-item-info">
                   <span className={`badge ${s.cls}`}>{s.label}</span>
-                  <p className="history-date">{formatDate(item.date)}</p>
+                  <p className="history-date">
+                    {item.publishedAt
+                      ? `Publicado: ${formatDate(item.publishedAt)}`
+                      : item.status === 'scheduled' && item.scheduledFor
+                        ? `Programado: ${formatDate(item.scheduledFor)}`
+                        : formatDate(item.date)}
+                  </p>
                   <p className="history-caption-preview">
                     {item.caption.slice(0, 80)}{item.caption.length > 80 ? '...' : ''}
                   </p>
@@ -81,6 +107,23 @@ export default function History() {
               </span>
               <span className="detail-date">{formatDate(selected.date)}</span>
             </div>
+            {selected.status === 'scheduled' && selected.scheduledFor && (
+              <div className="detail-schedule">
+                <span>🗓️ Se publicará el <strong>{formatDate(selected.scheduledFor)}</strong></span>
+                <button className="btn btn-ghost" disabled={cancelling} onClick={() => cancelSchedule(selected)}>
+                  {cancelling ? 'Cancelando…' : 'Cancelar programación'}
+                </button>
+              </div>
+            )}
+            {selected.publishedAt && (
+              <p className="detail-note">
+                Publicado el {formatDate(selected.publishedAt)}
+                {selected.publishedLate && ' — con retraso: el servidor estaba apagado a la hora programada'}
+              </p>
+            )}
+            {selected.status === 'error' && selected.errorDetail && (
+              <p className="detail-note detail-error">⚠️ {selected.errorDetail}</p>
+            )}
             <div className="detail-caption">
               <div className="detail-caption-label">Caption</div>
               <pre className="detail-caption-text">{selected.caption}</pre>

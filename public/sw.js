@@ -1,4 +1,4 @@
-const CACHE = 'autopost-cm-v1';
+const CACHE = 'qubia-craft-v1';
 const ASSETS = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', e => {

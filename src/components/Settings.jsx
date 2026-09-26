@@ -3,27 +3,52 @@ import './Settings.css';
 
 const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 
+const TIPOS_NEGOCIO = [
+  'Inmobiliaria',
+  'Seguros',
+  'Restaurante / Hostelería',
+  'Retail / Tienda',
+  'Belleza y estética',
+  'Salud y bienestar',
+  'Servicios profesionales',
+  'Educación / Academia',
+  'Fitness / Deporte',
+  'Otro',
+];
+
 export default function Settings() {
   const [form, setForm] = useState({
-    nombre: '', instagram: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', cta: '', hashtags: ''
+    nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', cta: '', hashtags: '', vertical: {}
   });
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState({ count: 0, patterns: null });
+  const [verticals, setVerticals] = useState([]);
 
   useEffect(() => {
     Promise.all([
       fetch('/api/profile').then(r => r.json()),
-      fetch('/api/voice').then(r => r.json())
-    ]).then(([profile, voiceData]) => {
-      if (profile) setForm(f => ({ ...f, ...profile }));
+      fetch('/api/voice').then(r => r.json()),
+      fetch('/api/verticals').then(r => r.json())
+    ]).then(([profile, voiceData, verticalsData]) => {
+      if (profile) setForm(f => ({ ...f, ...profile, vertical: profile.vertical || {} }));
       if (voiceData) setVoice(voiceData);
+      if (Array.isArray(verticalsData)) setVerticals(verticalsData);
     }).finally(() => setLoading(false));
   }, []);
+
+  const activeVertical = verticals.find(v => v.matches.includes(form.tipoNegocio))
+    || verticals.find(v => v.key === 'generico');
 
   function update(e) {
     setSaved(false);
     setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+  }
+
+  function updateVertical(e) {
+    setSaved(false);
+    const { name, value } = e.target;
+    setForm(f => ({ ...f, vertical: { ...f.vertical, [name]: value } }));
   }
 
   async function save(e) {
@@ -54,12 +79,20 @@ export default function Settings() {
           </div>
 
           <div className="field-group">
+            <label>Tipo de negocio</label>
+            <select name="tipoNegocio" value={form.tipoNegocio} onChange={update}>
+              <option value="">Selecciona un tipo…</option>
+              {TIPOS_NEGOCIO.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+
+          <div className="field-group">
             <label>Usuario de Instagram</label>
             <input name="instagram" value={form.instagram} onChange={update} placeholder="Ej: sa_draftstudio" />
           </div>
 
           <div className="field-group">
-            <label>Sector / industria</label>
+            <label>Sector / industria (detalle)</label>
             <input name="sector" value={form.sector} onChange={update} placeholder="Ej: Correduría de seguros" />
           </div>
 
@@ -107,6 +140,27 @@ export default function Settings() {
           </div>
 
         </div>
+
+        {activeVertical && activeVertical.extraProfileFields.length > 0 && (
+          <div className="vertical-section">
+            <div className="vertical-section-title">
+              📋 Campos de {activeVertical.label}
+            </div>
+            <div className="settings-grid">
+              {activeVertical.extraProfileFields.map(f => (
+                <div className="field-group full" key={f.name}>
+                  <label>{f.label}</label>
+                  <input
+                    name={f.name}
+                    value={form.vertical?.[f.name] || ''}
+                    onChange={updateVertical}
+                    placeholder={f.placeholder}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Sección voz aprendida */}
         <div className="voice-section">

@@ -261,18 +261,18 @@
 .result-screen h2 { font-size: 26px; font-weight: 700; }
 .result-msg { color: var(--text2); font-size: 15px; }
 .result-voice-note {
-  background: rgba(168, 85, 247, 0.1);
-  border: 1px solid rgba(168, 85, 247, 0.4);
+  background: rgba(23, 195, 198, 0.1);
+  border: 1px solid rgba(23, 195, 198, 0.4);
   border-radius: var(--radius-sm);
   padding: 12px 16px;
   font-size: 13px;
-  color: #c084fc;
+  color: var(--accent2);
   text-align: left;
   line-height: 1.6;
 }
 
 .result-demo-note {
-  background: rgba(79,142,247,0.1);
+  background: rgba(198,151,88,0.1);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   padding: 12px 16px;
