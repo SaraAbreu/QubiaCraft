@@ -4,6 +4,7 @@ export default {
   key: 'salud',
   label: 'Salud y bienestar',
   icon: '🩺',
+  limites: ['No diagnostica ni promete curas', 'Sin antes/después', 'Remite a consulta'],
   matches: ['Salud y bienestar'],
   promptGuidance:
     'Tono cercano, empático y riguroso. Informa y acompaña, no diagnostiques. NO prometas curas, resultados ni plazos, ' +

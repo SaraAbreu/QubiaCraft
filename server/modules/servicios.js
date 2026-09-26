@@ -3,6 +3,7 @@ export default {
   key: 'servicios',
   label: 'Servicios profesionales',
   icon: '💼',
+  limites: ['No promete resultados', 'No inventa cifras ni casos'],
   matches: ['Servicios profesionales'],
   promptGuidance:
     'Transmite autoridad y cercanía: plantea un problema real del cliente y cómo lo resuelves. Usa lenguaje claro, sin ' +

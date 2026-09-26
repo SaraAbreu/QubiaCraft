@@ -5,6 +5,7 @@ export default {
   label: 'Inmobiliaria',
   matches: ['Inmobiliaria'],
   icon: '🏠',
+  limites: ['No inventa precios, m² ni habitaciones'],
   promptGuidance:
     'Destaca ubicación, superficie, características diferenciales del inmueble (luz, terraza, vistas, estado) y genera ' +
     'urgencia sutil para agendar una visita. Evita inventar precios, metros cuadrados o cantidad de habitaciones si no ' +

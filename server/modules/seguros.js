@@ -6,6 +6,7 @@ export default {
   label: 'Seguros',
   matches: ['Seguros'],
   icon: '🛡️',
+  limites: ['No promete coberturas concretas', 'Detalles: con el agente', 'Sin tono alarmista'],
   promptGuidance:
     'Transmite confianza, tranquilidad y respaldo profesional. NO prometas coberturas, indemnizaciones ni condiciones ' +
     'específicas que no estén explícitamente en el contexto de marca — habla en términos generales (protección, tranquilidad, respaldo) ' +

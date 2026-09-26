@@ -64,6 +64,7 @@ function next7Days() {
 
 export default function Studio({ onOpenSettings }) {
   const [profile, setProfile] = useState(null);
+  const [verticals, setVerticals] = useState([]);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
 
@@ -95,6 +96,7 @@ export default function Studio({ onOpenSettings }) {
 
   useEffect(() => {
     fetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => setProfile({}));
+    fetch('/api/verticals').then(r => r.json()).then(setVerticals).catch(() => setVerticals([]));
     refreshHistory();
   }, []);
 
@@ -105,6 +107,15 @@ export default function Studio({ onOpenSettings }) {
       .then(data => { setHistory(data); setHistoryLoading(false); })
       .catch(() => setHistoryLoading(false));
   }
+
+  // Módulo activo: el que corresponde al "Tipo de negocio" del perfil
+  // (misma lógica que resolveVertical en el server; fallback: genérico).
+  const activeVertical = useMemo(() => {
+    if (!verticals.length) return null;
+    return verticals.find(v => v.matches.includes(profile?.tipoNegocio))
+      || verticals.find(v => v.key === 'generico')
+      || null;
+  }, [verticals, profile]);
 
   const stats = useMemo(() => {
     const s = { pending: 0, scheduled: 0, published: 0, rejected: 0 };
@@ -316,8 +327,22 @@ export default function Studio({ onOpenSettings }) {
                   <span className="brand-summary-name">{profile.nombre}</span>
                   <button className="link-btn" onClick={onOpenSettings}>Editar</button>
                 </div>
+                {activeVertical && (
+                  <div className="module-badge" title="La IA adapta el contenido a este sector">
+                    <span className="module-icon">{activeVertical.icon}</span>
+                    <div className="module-info">
+                      <span className="module-kicker">Módulo activo</span>
+                      <span className="module-label">{activeVertical.label}</span>
+                    </div>
+                  </div>
+                )}
+                {activeVertical?.limites?.length > 0 && (
+                  <ul className="module-limits" aria-label="Límites del sector">
+                    {activeVertical.limites.map(l => <li key={l}>{l}</li>)}
+                  </ul>
+                )}
                 <div className="brand-summary-tags">
-                  {profile.tipoNegocio && <span className="tag">{profile.tipoNegocio}</span>}
+                  {profile.tipoNegocio && profile.tipoNegocio !== activeVertical?.label && <span className="tag">{profile.tipoNegocio}</span>}
                   {profile.tono && <span className="tag tag-muted">{profile.tono}</span>}
                   {profile.ciudad && <span className="tag tag-muted">{profile.ciudad}</span>}
                 </div>

@@ -3,6 +3,7 @@ export default {
   key: 'comercio',
   label: 'Comercio',
   icon: '🛍️',
+  limites: ['No inventa precios, descuentos ni stock', 'Urgencia solo si es real'],
   matches: ['Retail / Tienda'],
   promptGuidance:
     'Presenta el producto por lo que aporta a quien lo compra (uso, ocasión, sensación), no solo por sus características. ' +

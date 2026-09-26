@@ -345,6 +345,7 @@ app.get('/api/verticals', (req, res) => {
     key: v.key,
     label: v.label,
     icon: v.icon || '',
+    limites: v.limites || [],
     matches: v.matches.filter(m => m !== 'default'),
     ejemplos: v.ejemplos || {},
     extraProfileFields: v.extraProfileFields,

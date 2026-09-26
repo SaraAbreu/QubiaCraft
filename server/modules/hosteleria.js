@@ -3,6 +3,7 @@ export default {
   key: 'hosteleria',
   label: 'Hostelería',
   icon: '🍽️',
+  limites: ['No inventa precios ni horarios', 'Alérgenos: consultar al personal'],
   matches: ['Restaurante / Hostelería'],
   promptGuidance:
     'Haz que el plato o el espacio se "saboree" con la lectura: texturas, aromas, temperatura, momento del día. ' +

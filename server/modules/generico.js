@@ -7,6 +7,7 @@ export default {
   // módulo. 'default' captura cualquier valor no listado en otro módulo.
   matches: ['Otro', 'default'],
   icon: '✨',
+  limites: ['Solo datos de tu perfil de marca', 'CTA realista'],
   promptGuidance:
     'Adapta el tono al tipo de negocio y al sector indicados en el contexto de marca. ' +
     'Destaca el beneficio concreto para el cliente y cierra con una llamada a la acción clara y realista para un negocio local.',

@@ -3,6 +3,7 @@ export default {
   key: 'belleza',
   label: 'Belleza y estética',
   icon: '💅',
+  limites: ['Sin resultados garantizados', 'Sin afirmaciones médicas'],
   matches: ['Belleza y estética'],
   promptGuidance:
     'Enfoca en cómo se siente la persona después (confianza, cuidado, estilo propio) y en el oficio detrás del trabajo. ' +

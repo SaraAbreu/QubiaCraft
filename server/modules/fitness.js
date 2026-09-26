@@ -3,6 +3,7 @@ export default {
   key: 'fitness',
   label: 'Fitness y deporte',
   icon: '🏋️',
+  limites: ['Sin promesas de peso ni plazos', 'Sin antes/después ni body-shaming'],
   matches: ['Fitness / Deporte'],
   promptGuidance:
     'Energía y motivación realista: constancia, comunidad, sentirse mejor. NO prometas pérdidas de peso, cambios ' +

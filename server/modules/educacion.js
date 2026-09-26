@@ -3,6 +3,7 @@ export default {
   key: 'educacion',
   label: 'Educación',
   icon: '🎓',
+  limites: ['No garantiza aprobados ni notas', 'Plazas y fechas solo si están en tu perfil'],
   matches: ['Educación / Academia'],
   promptGuidance:
     'Habla a quien decide (alumno o familia): progreso, acompañamiento y método. Motiva sin presionar. ' +
