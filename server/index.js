@@ -7,22 +7,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
 
-import generico from './modules/generico.js';
-import seguros from './modules/seguros.js';
-import inmobiliaria from './modules/inmobiliaria.js';
+import { VERTICALS, resolveVertical } from './modules/index.js';
 import { buildImagePrompt, generateImage } from './services/imageGen.js';
 import { history, saveHistory, findEntry, saveImage, imagePath, imageMime, imageDataUrl } from './services/store.js';
 import { startScheduler } from './services/scheduler.js';
 
-// Arquitectura por verticales: cada módulo define su propio prompt y sus
-// propios campos de perfil extra. 'generico' es el fallback para cualquier
-// tipo de negocio que no tenga módulo dedicado.
-const VERTICALS = [inmobiliaria, seguros, generico];
-
-function resolveVertical(tipoNegocio) {
-  const found = VERTICALS.find(v => v.matches.includes(tipoNegocio));
-  return found || generico;
-}
+// Arquitectura por verticales: cada módulo (server/modules) define su propio
+// prompt, campos de perfil extra, estilo de imagen y ejemplos. 'generico' es
+// el fallback para cualquier tipo de negocio sin módulo dedicado.
 
 const __file = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_PATH = path.join(__file, 'profile.json');
@@ -352,7 +344,9 @@ app.get('/api/verticals', (req, res) => {
   res.json(VERTICALS.map(v => ({
     key: v.key,
     label: v.label,
-    matches: v.matches,
+    icon: v.icon || '',
+    matches: v.matches.filter(m => m !== 'default'),
+    ejemplos: v.ejemplos || {},
     extraProfileFields: v.extraProfileFields,
   })));
 });

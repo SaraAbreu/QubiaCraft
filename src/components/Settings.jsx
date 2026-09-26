@@ -3,18 +3,8 @@ import './Settings.css';
 
 const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 
-const TIPOS_NEGOCIO = [
-  'Inmobiliaria',
-  'Seguros',
-  'Restaurante / Hostelería',
-  'Retail / Tienda',
-  'Belleza y estética',
-  'Salud y bienestar',
-  'Servicios profesionales',
-  'Educación / Academia',
-  'Fitness / Deporte',
-  'Otro',
-];
+// Los tipos de negocio salen del registro de módulos del servidor
+// (GET /api/verticals) para no duplicar la lista aquí.
 
 export default function Settings() {
   const [form, setForm] = useState({
@@ -39,6 +29,8 @@ export default function Settings() {
 
   const activeVertical = verticals.find(v => v.matches.includes(form.tipoNegocio))
     || verticals.find(v => v.key === 'generico');
+  const ej = (form.tipoNegocio && activeVertical?.ejemplos) || {};
+  const tiposNegocio = verticals.flatMap(v => v.matches.map(m => ({ value: m, icon: v.icon })));
 
   function update(e) {
     setSaved(false);
@@ -82,7 +74,10 @@ export default function Settings() {
             <label>Tipo de negocio</label>
             <select name="tipoNegocio" value={form.tipoNegocio} onChange={update}>
               <option value="">Selecciona un tipo…</option>
-              {TIPOS_NEGOCIO.map(t => <option key={t} value={t}>{t}</option>)}
+              {tiposNegocio.map(t => <option key={t.value} value={t.value}>{t.icon} {t.value}</option>)}
+              {form.tipoNegocio && !tiposNegocio.some(t => t.value === form.tipoNegocio) && (
+                <option value={form.tipoNegocio}>{form.tipoNegocio}</option>
+              )}
             </select>
           </div>
 
@@ -115,7 +110,7 @@ export default function Settings() {
               value={form.servicios}
               onChange={update}
               rows={3}
-              placeholder="Ej: Seguros de hogar, auto, vida y salud para familias y autónomos"
+              placeholder={ej.servicios || 'Ej: Qué vendes u ofreces y a quién'}
             />
           </div>
 
@@ -125,7 +120,7 @@ export default function Settings() {
               name="cta"
               value={form.cta}
               onChange={update}
-              placeholder="Ej: Llámanos al 900 123 456 o escríbenos por DM"
+              placeholder={ej.cta || 'Ej: Escríbenos por DM o llámanos'}
             />
           </div>
 
@@ -135,7 +130,7 @@ export default function Settings() {
               name="hashtags"
               value={form.hashtags}
               onChange={update}
-              placeholder="Ej: #SegurosGarcía #TuSeguroDeConfianza #MadridSeguros"
+              placeholder={ej.hashtags || 'Ej: #TuMarca #TuCiudad'}
             />
           </div>
 
@@ -144,7 +139,7 @@ export default function Settings() {
         {activeVertical && activeVertical.extraProfileFields.length > 0 && (
           <div className="vertical-section">
             <div className="vertical-section-title">
-              📋 Campos de {activeVertical.label}
+              {activeVertical.icon || '📋'} Campos de {activeVertical.label}
             </div>
             <div className="settings-grid">
               {activeVertical.extraProfileFields.map(f => (

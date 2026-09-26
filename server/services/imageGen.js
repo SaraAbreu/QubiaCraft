@@ -12,7 +12,8 @@ export function buildImagePrompt(description, profile = {}, vertical) {
   const parts = [description.trim()];
 
   if (profile?.sector) parts.push(`negocio del sector ${profile.sector}`);
-  if (vertical?.label) parts.push(`estilo visual apropiado para ${vertical.label.toLowerCase()}`);
+  if (vertical?.imageStyle) parts.push(vertical.imageStyle);
+  else if (vertical?.label) parts.push(`estilo visual apropiado para ${vertical.label.toLowerCase()}`);
   if (profile?.tono) parts.push(`tono visual ${profile.tono.toLowerCase()}`);
 
   parts.push('fotografía profesional, alta calidad, iluminación natural, apta para publicar en Instagram');
