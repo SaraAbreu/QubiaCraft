@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-// Pollinations.AI: generación de imágenes por IA gratuita y sin API key.
+// Pollinations.AI: generación de imágenes por IA. Funciona sin API key (nivel
+// gratuito); si POLLINATIONS_API_KEY está en .env se envía como Bearer token
+// para usar el nivel de tu cuenta (menos límites, sin cola).
 // Documentación: https://pollinations.ai — el endpoint devuelve la imagen
 // directamente al pedir la URL con el prompt codificado.
 const POLLINATIONS_BASE = 'https://image.pollinations.ai/prompt';
@@ -27,9 +29,11 @@ export async function generateImage(prompt, { width = 1024, height = 1024, timeo
   const seed = Math.floor(Math.random() * 1_000_000);
   const url = `${POLLINATIONS_BASE}/${encodeURIComponent(prompt)}?width=${width}&height=${height}&seed=${seed}&nologo=true`;
 
+  const key = process.env.POLLINATIONS_API_KEY?.trim();
   const response = await axios.get(url, {
     responseType: 'arraybuffer',
     timeout: timeoutMs,
+    headers: key ? { Authorization: `Bearer ${key}` } : {},
   });
 
   const contentType = response.headers['content-type'] || 'image/jpeg';

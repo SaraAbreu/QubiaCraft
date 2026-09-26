@@ -35,6 +35,7 @@ Abre http://localhost:5173 en el navegador.
 | Variable | Descripción |
 |----------|-------------|
 | GROQ_API_KEY | API key de Groq (obligatoria) |
+| POLLINATIONS_API_KEY | API key de Pollinations.AI (opcional, para generar imágenes con tu cuenta) |
 | META_ACCESS_TOKEN | Token de Meta Graph API (opcional, para publicar en Instagram) |
 | META_INSTAGRAM_ACCOUNT_ID | ID de la cuenta de Instagram Business (opcional) |
 | PORT | Puerto del servidor (por defecto: 3001) |
