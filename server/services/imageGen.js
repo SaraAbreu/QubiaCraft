@@ -5,7 +5,10 @@ import axios from 'axios';
 // para usar el nivel de tu cuenta (menos límites, sin cola).
 // Documentación: https://pollinations.ai — el endpoint devuelve la imagen
 // directamente al pedir la URL con el prompt codificado.
-const POLLINATIONS_BASE = 'https://image.pollinations.ai/prompt';
+// API actual: gen.pollinations.ai/image/{prompt} (clave sk_… como Bearer).
+// La antigua image.pollinations.ai/prompt queda como respaldo.
+const POLLINATIONS_GEN = 'https://gen.pollinations.ai/image';
+const POLLINATIONS_LEGACY = 'https://image.pollinations.ai/prompt';
 
 // Construye un prompt enriquecido con el estilo visual de marca y del
 // módulo/vertical activo, para que la imagen generada encaje con el resto
@@ -22,20 +25,48 @@ export function buildImagePrompt(description, profile = {}, vertical) {
   return parts.filter(Boolean).join(', ');
 }
 
-// Descarga la imagen generada como buffer binario (jpeg) para poder
-// tratarla igual que una imagen subida por el usuario (compresión, base64
-// hacia Groq Vision, guardado en historial, etc.)
-export async function generateImage(prompt, { width = 1024, height = 1024, timeoutMs = 45000 } = {}) {
+// Descarga la imagen generada como buffer binario para tratarla igual que
+// una imagen subida por el usuario. Prueba primero la API actual y, si
+// falla, la antigua. Lanza un Error con un mensaje legible en español.
+export async function generateImage(prompt, { width = 1024, height = 1024, timeoutMs = 60000 } = {}) {
   const seed = Math.floor(Math.random() * 1_000_000);
-  const url = `${POLLINATIONS_BASE}/${encodeURIComponent(prompt)}?width=${width}&height=${height}&seed=${seed}&nologo=true`;
-
+  const qs = `width=${width}&height=${height}&seed=${seed}&nologo=true`;
   const key = process.env.POLLINATIONS_API_KEY?.trim();
-  const response = await axios.get(url, {
-    responseType: 'arraybuffer',
-    timeout: timeoutMs,
-    headers: key ? { Authorization: `Bearer ${key}` } : {},
-  });
+  const headers = key ? { Authorization: `Bearer ${key}` } : {};
 
-  const contentType = response.headers['content-type'] || 'image/jpeg';
-  return { buffer: Buffer.from(response.data), contentType };
+  // 1) API actual con tu clave. 2) Nivel gratuito anónimo (endpoint antiguo,
+  // sin clave): así, si la cuenta no tiene saldo (402), sigue funcionando.
+  const attempts = [
+    { url: `${POLLINATIONS_GEN}/${encodeURIComponent(prompt)}?${qs}`, headers },
+    { url: `${POLLINATIONS_LEGACY}/${encodeURIComponent(prompt)}?${qs}`, headers: {} },
+  ];
+
+  let lastErr, firstErr;
+  for (const { url, headers } of attempts) {
+    try {
+      const response = await axios.get(url, { responseType: 'arraybuffer', timeout: timeoutMs, headers });
+      const contentType = response.headers['content-type'] || 'image/jpeg';
+      if (!contentType.startsWith('image/')) {
+        throw Object.assign(new Error('La respuesta no es una imagen'), { body: Buffer.from(response.data).toString().slice(0, 200) });
+      }
+      return { buffer: Buffer.from(response.data), contentType };
+    } catch (err) {
+      lastErr = err;
+      firstErr = firstErr || err;
+      const body = err.body || (err.response?.data ? Buffer.from(err.response.data).toString().slice(0, 200) : '');
+      console.error(`[imageGen] ${new URL(url).host} → ${err.response?.status || err.code || ''} ${err.message} ${body}`);
+    }
+  }
+  // Si la cuenta no tiene saldo, ese es el mensaje útil aunque el gratuito también falle.
+  throw new Error(friendlyError(firstErr?.response?.status === 402 ? firstErr : lastErr));
+}
+
+function friendlyError(err) {
+  const status = err?.response?.status;
+  if (status === 401 || status === 403) return 'Pollinations rechazó la clave (401/403). Revisa POLLINATIONS_API_KEY en el .env (debe empezar por sk_).';
+  if (status === 402) return 'Tu cuenta de Pollinations no tiene saldo (402). Revisa tu cuenta en enter.pollinations.ai.';
+  if (status === 429 || status === 503) return 'Pollinations está saturado o has llegado al límite (429). Prueba de nuevo en un minuto.';
+  if (err?.code === 'ECONNABORTED') return 'Pollinations tardó demasiado en responder. Prueba de nuevo.';
+  if (err?.code === 'ENOTFOUND' || err?.code === 'ECONNREFUSED') return 'No se pudo conectar con Pollinations. Revisa tu conexión a internet.';
+  return `Error de Pollinations${status ? ` (${status})` : ''}: ${err?.message || 'desconocido'}`;
 }

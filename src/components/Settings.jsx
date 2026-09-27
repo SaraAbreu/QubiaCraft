@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import './Settings.css';
+import InstagramConnect from './InstagramConnect.jsx';
 
 const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 
 // Los tipos de negocio salen del registro de módulos del servidor
 // (GET /api/verticals) para no duplicar la lista aquí.
 
-export default function Settings() {
+export default function Settings({ igFlash }) {
   const [form, setForm] = useState({
     nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', cta: '', hashtags: '', vertical: {}
   });
@@ -61,6 +62,8 @@ export default function Settings() {
         <h1>Perfil de marca</h1>
         <p>La IA usará estos datos para generar captions adaptados a tu empresa</p>
       </div>
+
+      <InstagramConnect flash={igFlash} />
 
       <form className="settings-form" onSubmit={save}>
         <div className="settings-grid">

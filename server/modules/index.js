@@ -11,10 +11,11 @@ import educacion from './educacion.js';
 import servicios from './servicios.js';
 import inmobiliaria from './inmobiliaria.js';
 import seguros from './seguros.js';
+import fotografia from './fotografia.js';
 import generico from './generico.js';
 
 export const VERTICALS = [
-  hosteleria, comercio, belleza, salud, fitness, educacion, servicios, inmobiliaria, seguros, generico,
+  hosteleria, comercio, belleza, salud, fitness, educacion, servicios, inmobiliaria, seguros, fotografia, generico,
 ];
 
 export function resolveVertical(tipoNegocio) {

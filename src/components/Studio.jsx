@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import './Studio.css';
+import './InstagramConnect.css';
 
 const TONOS = [
   { label: 'Inspiracional', icon: '✨' },
@@ -65,6 +66,7 @@ function next7Days() {
 export default function Studio({ onOpenSettings }) {
   const [profile, setProfile] = useState(null);
   const [verticals, setVerticals] = useState([]);
+  const [igStatus, setIgStatus] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
 
@@ -96,6 +98,7 @@ export default function Studio({ onOpenSettings }) {
 
   useEffect(() => {
     fetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => setProfile({}));
+    fetch('/api/instagram/status').then(r => r.json()).then(setIgStatus).catch(() => setIgStatus(null));
     fetch('/api/verticals').then(r => r.json()).then(setVerticals).catch(() => setVerticals([]));
     refreshHistory();
   }, []);
@@ -295,7 +298,7 @@ export default function Studio({ onOpenSettings }) {
     resetAll();
   }
 
-  const igUser = profile?.instagram || profile?.nombre || 'tu_empresa';
+  const igUser = (igStatus?.connected && igStatus.username) || profile?.instagram || profile?.nombre || 'tu_empresa';
   const igInitials = igUser.slice(0, 2).toUpperCase();
   const igLocation = profile?.ciudad || 'España';
   const charCount = caption.length;
@@ -493,6 +496,20 @@ export default function Studio({ onOpenSettings }) {
           </div>
 
           <div className="panel-body">
+            {igStatus && (
+              <div className={`ig-status-line ${igStatus.connected || igStatus.legacyEnv ? 'on' : ''}`}>
+                <span className="dot" />
+                {igStatus.connected
+                  ? <span>Publicando en <strong>@{igStatus.username}</strong></span>
+                  : igStatus.legacyEnv
+                    ? <span>Publicando con el token del <strong>.env</strong></span>
+                    : <span><strong>Modo demo</strong> · no se publica en Instagram</span>}
+                {!igStatus.connected && (
+                  <button className="link-btn" onClick={onOpenSettings}>Conectar</button>
+                )}
+              </div>
+            )}
+
             <div className="stats-row">
               <div className="stat-tile">
                 <span className="stat-value">{stats.pending}</span>

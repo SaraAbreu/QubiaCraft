@@ -11,6 +11,7 @@ import { VERTICALS, resolveVertical } from './modules/index.js';
 import { buildImagePrompt, generateImage } from './services/imageGen.js';
 import { history, saveHistory, findEntry, saveImage, imagePath, imageMime, imageDataUrl } from './services/store.js';
 import { startScheduler } from './services/scheduler.js';
+import * as ig from './services/instagram.js';
 
 // Arquitectura por verticales: cada módulo (server/modules) define su propio
 // prompt, campos de perfil extra, estilo de imagen y ejemplos. 'generico' es
@@ -208,7 +209,7 @@ app.post('/api/generate-image', express.json(), async (req, res) => {
     res.send(buffer);
   } catch (err) {
     console.error('Error en /api/generate-image:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Error generando la imagen con IA', detail: err.message });
+    res.status(500).json({ error: err.message || 'Error generando la imagen con IA' });
   }
 });
 
@@ -221,39 +222,64 @@ const MAX_SCHEDULE_MS = 365 * 24 * 60 * 60 * 1000; // 1 año
 // de una publicación programada.
 async function doPublish(entry, caption, imageBase64) {
   entry = entry || {};
-  if (!process.env.META_ACCESS_TOKEN || !process.env.META_INSTAGRAM_ACCOUNT_ID) {
-    entry.status = 'published_demo';
-    entry.publishedAt = new Date().toISOString();
-    return {
-      success: true,
-      demo: true,
-      message: 'Modo demo: Meta Graph API no configurada. El caption se aprobó correctamente.'
-    };
+  const imagePublicUrl = entry.imageFile && ig.publicUrl()
+    ? `${ig.publicUrl()}/api/images/${entry.imageFile}`
+    : null;
+
+  // 1) Cuenta conectada por OAuth (Instagram Login) — modo principal.
+  if (ig.isConnected()) {
+    if (!imagePublicUrl) {
+      entry.status = 'error';
+      return {
+        success: false,
+        error: 'Falta la URL pública de la imagen',
+        detail: 'Configura PUBLIC_URL en el .env para que Meta pueda descargar la imagen.'
+      };
+    }
+    try {
+      const { containerId, mediaId } = await ig.publishImage(imagePublicUrl, caption);
+      entry.status = 'published';
+      entry.publishedAt = new Date().toISOString();
+      entry.igMediaId = mediaId;
+      return { success: true, containerId, mediaId, message: '¡Publicado en Instagram!' };
+    } catch (err) {
+      entry.status = 'error';
+      const detail = ig.graphError(err);
+      console.error('Error publicando (Instagram Login):', err.response?.data || err.message);
+      return { success: false, error: 'Error publicando en Instagram', detail };
+    }
   }
 
-  try {
-    // Paso 1: Subir imagen como contenedor
-    const imageUrl = imageBase64; // En produccion deberia ser una URL publica
-    const containerRes = await axios.post(
-      `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media`,
-      { image_url: imageUrl, caption, access_token: process.env.META_ACCESS_TOKEN }
-    );
-    const containerId = containerRes.data.id;
-
-    // Paso 2: Publicar contenedor
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media_publish`,
-      { creation_id: containerId, access_token: process.env.META_ACCESS_TOKEN }
-    );
-
-    entry.status = 'published';
-    entry.publishedAt = new Date().toISOString();
-    return { success: true, containerId };
-  } catch (err) {
-    entry.status = 'error';
-    console.error('Error en doPublish:', err.response?.data || err.message);
-    return { success: false, error: 'Error publicando en Instagram', detail: err.message };
+  // 2) Token fijo en .env (META_ACCESS_TOKEN + META_INSTAGRAM_ACCOUNT_ID) — modo antiguo.
+  if (process.env.META_ACCESS_TOKEN && process.env.META_INSTAGRAM_ACCOUNT_ID) {
+    try {
+      const containerRes = await axios.post(
+        `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media`,
+        { image_url: imagePublicUrl || imageBase64, caption, access_token: process.env.META_ACCESS_TOKEN }
+      );
+      const containerId = containerRes.data.id;
+      await axios.post(
+        `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media_publish`,
+        { creation_id: containerId, access_token: process.env.META_ACCESS_TOKEN }
+      );
+      entry.status = 'published';
+      entry.publishedAt = new Date().toISOString();
+      return { success: true, containerId, message: '¡Publicado en Instagram!' };
+    } catch (err) {
+      entry.status = 'error';
+      console.error('Error en doPublish:', err.response?.data || err.message);
+      return { success: false, error: 'Error publicando en Instagram', detail: ig.graphError(err) };
+    }
   }
+
+  // 3) Sin conexión → modo demo.
+  entry.status = 'published_demo';
+  entry.publishedAt = new Date().toISOString();
+  return {
+    success: true,
+    demo: true,
+    message: 'Modo demo: conecta tu Instagram en Perfil de marca para publicar de verdad. El caption se aprobó correctamente.'
+  };
 }
 
 // ─── API: Publicar o programar en Instagram ──────────────────────────────────
@@ -352,6 +378,45 @@ app.get('/api/verticals', (req, res) => {
   })));
 });
 
+// ─── API: Conexión con Instagram (OAuth) ─────────────────────────────────────
+// A dónde volver tras el OAuth: el frontend (en dev, Vite en :5173).
+function appUrl() {
+  return (process.env.APP_URL || (IS_PROD ? ig.publicUrl() : 'http://localhost:5173')).replace(/\/+$/, '');
+}
+
+app.get('/api/instagram/status', (req, res) => res.json(ig.publicStatus()));
+
+app.get('/api/instagram/connect', (req, res) => {
+  const missing = ig.missingConfig();
+  if (missing.length) {
+    return res.status(400).json({ error: `Faltan variables en el .env: ${missing.join(', ')}`, missing });
+  }
+  res.json({ url: ig.buildAuthUrl() });
+});
+
+app.get('/api/instagram/callback', async (req, res) => {
+  const back = (status, msg) =>
+    res.redirect(`${appUrl()}/?instagram=${status}${msg ? `&msg=${encodeURIComponent(msg)}` : ''}`);
+
+  const { code, state, error, error_description } = req.query;
+  if (error) return back('error', error_description || 'Autorización cancelada');
+  if (!code || !ig.consumeState(state)) return back('error', 'La sesión de conexión caducó. Vuelve a intentarlo.');
+
+  try {
+    const conn = await ig.completeOAuth(code);
+    console.log(`[instagram] Conectada @${conn.username}`);
+    back('connected');
+  } catch (err) {
+    console.error('[instagram] Error en OAuth:', err.response?.data || err.message);
+    back('error', ig.graphError(err));
+  }
+});
+
+app.post('/api/instagram/disconnect', (req, res) => {
+  ig.clearConnection();
+  res.json({ success: true });
+});
+
 // ─── API: Perfil de marca ────────────────────────────────────────────────────
 app.get('/api/profile', (req, res) => res.json(loadProfile()));
 
@@ -397,5 +462,6 @@ if (IS_PROD) {
 app.listen(PORT, () => {
   console.log(`Qubia Craft corriendo en http://localhost:${PORT}`);
   if (!IS_PROD) console.log(`Frontend dev: http://localhost:5173`);
+  ig.startTokenRefresher();
   startScheduler(entry => doPublish(entry, entry.caption, entry.imageFile ? imageDataUrl(entry.imageFile) : entry.image));
 });

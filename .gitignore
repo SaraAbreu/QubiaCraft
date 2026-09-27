@@ -5,3 +5,4 @@ server/profile.json
 server/voice.json
 
 server/data/
+.env.bak*
