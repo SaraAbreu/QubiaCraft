@@ -117,3 +117,14 @@
   .sidebar-nav-label { display: none; }
   .sidebar-footer { display: none; }
 }
+
+/* Sesión */
+.sidebar-logout { margin: auto 12px 8px; width: auto; }
+.sidebar-logout:hover { color: var(--danger) !important; }
+.sidebar-user {
+  font-size: 12px; color: var(--text2); margin-bottom: 8px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (max-width: 860px) {
+  .sidebar-logout { margin: auto 8px 12px; }
+}

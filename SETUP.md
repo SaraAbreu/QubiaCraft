@@ -35,12 +35,27 @@ Abre http://localhost:5173 en el navegador.
 | Variable | Descripción |
 |----------|-------------|
 | GROQ_API_KEY | API key de Groq (obligatoria) |
-| POLLINATIONS_API_KEY | API key de Pollinations.AI (opcional, para generar imágenes con tu cuenta) |
-| META_ACCESS_TOKEN | Token de Meta Graph API (opcional, para publicar en Instagram) |
-| META_INSTAGRAM_ACCOUNT_ID | ID de la cuenta de Instagram Business (opcional) |
+| GROQ_VISION_MODEL | Modelo de visión de Groq (por defecto `qwen/qwen3.8-27b`) |
+| POLLINATIONS_API_KEY | API key de Pollinations.AI (opcional, para generar imágenes) |
+| INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET | App de Meta con "Instagram API with Instagram Login" |
+| PUBLIC_URL | URL pública del backend (callback de Instagram e imágenes para Meta) |
+| JWT_SECRET | Clave de las sesiones. Obligatoria en producción |
+| ALLOW_SIGNUP | `true` / `false`: permitir crear cuentas nuevas |
+| INVITE_CODE | Si tiene valor, hace falta para registrarse |
+| DATABASE_URL | PostgreSQL en producción. Vacía en local → PGlite (sin instalar nada) |
 | PORT | Puerto del servidor (por defecto: 3001) |
 
-Sin META_ACCESS_TOKEN, la app funciona en modo demo: genera captions pero no publica en Instagram.
+## Cuentas de usuario
+
+Cada persona entra con su email y contraseña y tiene **su propio** perfil de
+marca, historial, voz aprendida y conexión de Instagram. Nadie ve ni publica
+en la cuenta de otra persona.
+
+- La primera cuenta que se crea hereda los datos de la versión anterior
+  (perfil, historial y conexión de Instagram guardados en archivos JSON).
+  Esos archivos se renombran a `*.migrated`; no se borra nada.
+- Mientras la app de Meta esté en modo desarrollo, solo pueden conectar su
+  Instagram las cuentas añadidas como evaluadoras en Meta for Developers.
 
 ## Adaptar la app a cualquier negocio
 
@@ -58,7 +73,7 @@ Qubia Craft usa el **tipo de negocio** para adaptar el estilo de los captions (i
 1. Crea cuenta en railway.app
 2. Conecta tu repositorio de GitHub
 3. Railway detecta automáticamente Node.js
-4. Añade las variables de entorno en el panel de Railway (nunca subas tu GROQ_API_KEY al repositorio)
+4. Añade un servicio PostgreSQL y las variables de entorno en el panel de Railway (DATABASE_URL, JWT_SECRET, GROQ_API_KEY…; nunca las subas al repositorio)
 5. Ejecuta `npm run build` como build command y `npm start` como start command
 
 La URL de Railway sirve tanto el frontend como la API.

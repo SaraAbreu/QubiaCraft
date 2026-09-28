@@ -1,23 +1,15 @@
 // Conexión con Instagram por OAuth ("Instagram API with Instagram Login").
-// Conecta una cuenta profesional directamente, sin página de Facebook.
-// Las llamadas van a graph.instagram.com.
-//
-// Modo actual: una sola cuenta conectada para toda la app, guardada en
-// server/data/instagram.json (fuera de git). El token nunca se envía al
-// frontend. Cuando haya multi-usuario, esto pasa a la tabla de usuarios.
+// Cada usuario de Qubia Craft conecta SU cuenta profesional; la conexión se
+// guarda en la base de datos (tabla instagram_connections, ver repo.js).
+// Este módulo no guarda nada: recibe y devuelve objetos de conexión.
+// El token nunca se envía al frontend.
 //
 // Variables de entorno necesarias:
 //   INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET → panel de Meta for Developers
 //   PUBLIC_URL → URL pública del backend (Meta no acepta localhost). Se usa
 //                para el callback OAuth y para servir las imágenes a Meta.
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
 import axios from 'axios';
-import { fileURLToPath } from 'url';
-
-const __dir = path.dirname(fileURLToPath(import.meta.url));
-const CONN_PATH = path.join(__dir, '..', 'data', 'instagram.json');
 
 const GRAPH = 'https://graph.instagram.com';
 const API_VERSION = 'v21.0';
@@ -37,55 +29,38 @@ export function missingConfig() {
   return ['INSTAGRAM_APP_ID', 'INSTAGRAM_APP_SECRET', 'PUBLIC_URL'].filter(k => !process.env[k]);
 }
 
-// ─── Persistencia de la conexión ────────────────────────────────────────────
-export function loadConnection() {
-  try { return JSON.parse(fs.readFileSync(CONN_PATH, 'utf8')); }
-  catch { return null; }
-}
-
-function saveConnection(conn) {
-  fs.mkdirSync(path.dirname(CONN_PATH), { recursive: true });
-  const tmp = CONN_PATH + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(conn, null, 2), 'utf8');
-  fs.renameSync(tmp, CONN_PATH);
-}
-
-export function clearConnection() {
-  try { fs.unlinkSync(CONN_PATH); } catch { /* ya no existía */ }
-}
-
-export function isConnected() {
-  const c = loadConnection();
+export function isConnected(c) {
   return !!(c?.accessToken && c?.igUserId && (!c.expiresAt || new Date(c.expiresAt) > new Date()));
 }
 
 // Estado seguro para el frontend (sin token).
-export function publicStatus() {
-  const c = loadConnection();
+export function publicStatus(c) {
   const expired = !!(c?.expiresAt && new Date(c.expiresAt) <= new Date());
   return {
     configured: missingConfig().length === 0,
     missing: missingConfig(),
-    connected: isConnected(),
+    connected: isConnected(c),
     expired,
     username: c?.username || null,
     profilePicture: c?.profilePicture || null,
     accountType: c?.accountType || null,
     connectedAt: c?.connectedAt || null,
     expiresAt: c?.expiresAt || null,
-    legacyEnv: !!(process.env.META_ACCESS_TOKEN && process.env.META_INSTAGRAM_ACCOUNT_ID),
   };
 }
 
 // ─── OAuth ──────────────────────────────────────────────────────────────────
 // state anti-CSRF: en memoria, un solo uso, caduca a los 10 minutos.
-const pendingStates = new Map();
+// Además dice qué usuario inició la conexión: el callback llega desde
+// Instagram a PUBLIC_URL, donde no está la cookie de sesión de la app.
+const STATE_TTL = 10 * 60 * 1000;
+const pendingStates = new Map(); // state → { t, userId }
 
-export function buildAuthUrl() {
+export function buildAuthUrl(userId) {
   const state = crypto.randomBytes(16).toString('hex');
   const now = Date.now();
-  for (const [s, t] of pendingStates) if (now - t > 10 * 60 * 1000) pendingStates.delete(s);
-  pendingStates.set(state, now);
+  for (const [s, v] of pendingStates) if (now - v.t > STATE_TTL) pendingStates.delete(s);
+  pendingStates.set(state, { t: now, userId });
 
   const params = new URLSearchParams({
     client_id: process.env.INSTAGRAM_APP_ID,
@@ -99,10 +74,11 @@ export function buildAuthUrl() {
   return `https://www.instagram.com/oauth/authorize?${params}`;
 }
 
+// Devuelve el id del usuario que inició la conexión, o null si no vale.
 export function consumeState(state) {
-  const t = pendingStates.get(state);
+  const v = pendingStates.get(state);
   pendingStates.delete(state);
-  return !!t && Date.now() - t <= 10 * 60 * 1000;
+  return v && Date.now() - v.t <= STATE_TTL ? v.userId : null;
 }
 
 // Código → token corto (~1 h) → token largo (60 días) → datos de la cuenta.
@@ -146,37 +122,33 @@ export async function completeOAuth(rawCode) {
     refreshedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + (expires_in || 60 * 24 * 3600) * 1000).toISOString(),
   };
-  saveConnection(conn);
   return conn;
 }
 
-// ─── Renovación automática del token ────────────────────────────────────────
+// ─── Renovación del token ───────────────────────────────────────────────────
 // Meta permite renovar un token largo si tiene más de 24 h y no ha caducado.
-// Renovamos cuando le quedan menos de 10 días.
-export async function refreshIfNeeded() {
-  const c = loadConnection();
-  if (!c?.accessToken || !c.expiresAt) return;
+// Renovamos cuando le quedan menos de 10 días. Devuelve la conexión
+// renovada, o null si no hacía falta (o no se pudo).
+export async function refreshIfNeeded(c) {
+  if (!c?.accessToken || !c.expiresAt) return null;
   const left = new Date(c.expiresAt).getTime() - Date.now();
   const age = Date.now() - new Date(c.refreshedAt || c.connectedAt).getTime();
-  if (left <= 0 || left > 10 * DAY_MS || age < DAY_MS) return;
+  if (left <= 0 || left > 10 * DAY_MS || age < DAY_MS) return null;
 
   try {
     const res = await axios.get(`${GRAPH}/refresh_access_token`, {
       params: { grant_type: 'ig_refresh_token', access_token: c.accessToken },
     });
-    c.accessToken = res.data.access_token;
-    c.refreshedAt = new Date().toISOString();
-    c.expiresAt = new Date(Date.now() + res.data.expires_in * 1000).toISOString();
-    saveConnection(c);
-    console.log(`[instagram] Token renovado, caduca el ${c.expiresAt}`);
+    return {
+      ...c,
+      accessToken: res.data.access_token,
+      refreshedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + res.data.expires_in * 1000).toISOString(),
+    };
   } catch (err) {
-    console.error('[instagram] No se pudo renovar el token:', err.response?.data?.error?.message || err.message);
+    console.error(`[instagram] No se pudo renovar el token de @${c.username}:`, err.response?.data?.error?.message || err.message);
+    return null;
   }
-}
-
-export function startTokenRefresher() {
-  refreshIfNeeded();
-  return setInterval(refreshIfNeeded, 12 * 60 * 60 * 1000);
 }
 
 // ─── Publicación ────────────────────────────────────────────────────────────
@@ -195,15 +167,14 @@ async function waitForContainer(creationId, token) {
   }
 }
 
-function requireConnection() {
-  const c = loadConnection();
-  if (!c?.accessToken) throw new Error('No hay ninguna cuenta de Instagram conectada');
+function requireConnection(c) {
+  if (!isConnected(c)) throw new Error('No hay ninguna cuenta de Instagram conectada (o el token caducó)');
   return c;
 }
 
 // imageUrl debe ser una URL pública (https) accesible por Meta.
-export async function publishImage(imageUrl, caption) {
-  const c = requireConnection();
+export async function publishImage(conn, imageUrl, caption) {
+  const c = requireConnection(conn);
   const base = `${GRAPH}/${API_VERSION}/${c.igUserId}`;
   const container = await axios.post(`${base}/media`, null, {
     params: { image_url: imageUrl, caption, access_token: c.accessToken },
@@ -221,10 +192,10 @@ export async function publishImage(imageUrl, caption) {
 // contenedor por imagen (is_carousel_item) y luego el contenedor CAROUSEL
 // que las agrupa, en el orden recibido.
 export const CAROUSEL_MAX = 10;
-export async function publishCarousel(imageUrls, caption) {
-  if (imageUrls.length < 2) return publishImage(imageUrls[0], caption);
+export async function publishCarousel(conn, imageUrls, caption) {
+  if (imageUrls.length < 2) return publishImage(conn, imageUrls[0], caption);
   if (imageUrls.length > CAROUSEL_MAX) throw new Error(`Un carrusel admite como máximo ${CAROUSEL_MAX} imágenes`);
-  const c = requireConnection();
+  const c = requireConnection(conn);
   const base = `${GRAPH}/${API_VERSION}/${c.igUserId}`;
 
   const children = [];

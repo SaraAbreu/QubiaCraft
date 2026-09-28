@@ -9,7 +9,11 @@ import 'dotenv/config';
 
 import { VERTICALS, resolveVertical } from './modules/index.js';
 import { buildImagePrompt, generateImage } from './services/imageGen.js';
-import { history, saveHistory, findEntry, deleteEntry, saveImage, imagePath, imageMime, imageDataUrl } from './services/store.js';
+import { saveImage, imagePath, imageMime, deleteImages } from './services/store.js';
+import * as repo from './services/repo.js';
+import * as auth from './services/auth.js';
+import { initDb } from './db.js';
+import { hasLegacyData, migrateLegacyInto } from './services/legacy.js';
 import { startScheduler } from './services/scheduler.js';
 import * as ig from './services/instagram.js';
 
@@ -45,23 +49,6 @@ function removeCJK(text = '') {
 }
 
 const __file = path.dirname(fileURLToPath(import.meta.url));
-const PROFILE_PATH = path.join(__file, 'profile.json');
-const VOICE_PATH   = path.join(__file, 'voice.json');
-
-function loadProfile() {
-  try { return JSON.parse(fs.readFileSync(PROFILE_PATH, 'utf8')); }
-  catch { return {}; }
-}
-
-function loadVoice() {
-  try { return JSON.parse(fs.readFileSync(VOICE_PATH, 'utf8')); }
-  catch { return { examples: [], patterns: null }; }
-}
-
-function saveVoice(data) {
-  fs.writeFileSync(VOICE_PATH, JSON.stringify(data, null, 2), 'utf8');
-}
-
 async function analyzeVoice(examples) {
   const pairs = examples.map((e, i) =>
     `--- Par ${i + 1} ---\nOriginal IA:\n${e.original}\n\nEditado por el usuario:\n${e.final}`
@@ -120,18 +107,31 @@ function profileContext(p) {
   return `CONTEXTO DE MARCA (úsalo siempre, no pongas placeholders):\n${lines.filter(Boolean).join('\n')}${hintBlock}${disclaimerBlock}\n\n`;
 }
 
-function voiceContext() {
-  const { patterns } = loadVoice();
+function voiceContext(voice) {
+  const patterns = voice?.patterns;
   if (!patterns) return '';
   return `ESTILO APRENDIDO DEL USUARIO (respétalos estrictamente):\n${patterns}\n\n`;
 }
 
 const app = express();
+
+// Express 4 no captura errores de handlers async: los envolvemos para que un
+// fallo (p. ej. de la base de datos) llegue al manejador de errores en vez
+// de tumbar el proceso.
+for (const method of ['get', 'post', 'patch', 'delete']) {
+  const original = app[method].bind(app);
+  app[method] = (route, ...handlers) => {
+    if (!handlers.length) return original(route); // app.get('ajuste')
+    return original(route, ...handlers.map(h => (typeof h === 'function' && h.length < 4
+      ? (req, res, next) => { try { const r = h(req, res, next); if (r?.catch) r.catch(next); } catch (e) { next(e); } }
+      : h)));
+  };
+}
 const PORT = process.env.PORT || 3001;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-// El historial vive en server/data/history.json (ver services/store.js) y
-// sobrevive a reinicios del servidor.
+// Los datos (usuarios, perfiles, publicaciones, conexiones de Instagram)
+// viven en la base de datos (ver db.js y services/repo.js).
 
 // Multer — almacena en memoria para pasarlo a Groq como base64
 const upload = multer({
@@ -141,6 +141,76 @@ const upload = multer({
 
 app.use(cors());
 app.use(express.json());
+app.use(auth.loadUser);
+
+// Todo /api exige sesión salvo estas rutas públicas:
+// - auth: registro / login
+// - images: Meta tiene que poder descargar las fotos (nombres no adivinables)
+// - instagram/callback: vuelve desde Instagram, sin la cookie de la app
+// - verticals: catálogo de sectores (sin datos de usuario)
+const PUBLIC_API = [/^\/auth\//, /^\/images\//, /^\/instagram\/callback$/, /^\/verticals$/, /^\/health$/];
+app.use('/api', (req, res, next) =>
+  PUBLIC_API.some(r => r.test(req.path)) ? next() : auth.requireAuth(req, res, next));
+
+app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// ─── API: Cuentas (registro, login, sesión) ─────────────────────────────────
+app.get('/api/auth/config', (req, res) => res.json(auth.signupConfig()));
+
+app.get('/api/auth/me', (req, res) => res.json({ user: auth.publicUser(req.user) }));
+
+app.post('/api/auth/register', async (req, res) => {
+  const { signupOpen } = auth.signupConfig();
+  if (!signupOpen) return res.status(403).json({ error: 'El registro está cerrado. Pide acceso a la administradora.' });
+
+  const email = auth.normalizeEmail(req.body?.email);
+  const password = String(req.body?.password || '');
+  const name = String(req.body?.name || '').trim().slice(0, 80);
+  const key = `reg:${req.ip}`;
+  if (auth.tooManyAttempts(key)) return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos.' });
+  auth.recordAttempt(key);
+
+  if (!auth.inviteOk(req.body?.invite)) return res.status(403).json({ error: 'El código de invitación no es correcto' });
+  if (!auth.validEmail(email)) return res.status(400).json({ error: 'Escribe un email válido' });
+  if (password.length < 8) return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+  if (password.length > 200) return res.status(400).json({ error: 'La contraseña es demasiado larga' });
+  if (await repo.findUserByEmail(email)) return res.status(409).json({ error: 'Ya existe una cuenta con ese email' });
+
+  const isFirst = (await repo.countUsers()) === 0;
+  const user = await repo.createUser({ email, name, passwordHash: await auth.hashPassword(password) });
+
+  // El primer usuario hereda los datos de la versión anterior (archivos JSON).
+  let migrated = null;
+  if (isFirst && hasLegacyData()) {
+    migrated = await migrateLegacyInto(user.id);
+    console.log(`[auth] Datos anteriores migrados a ${email}:`, migrated);
+  }
+
+  auth.setSession(res, user.id);
+  res.json({ user: auth.publicUser(user), migrated });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const email = auth.normalizeEmail(req.body?.email);
+  const password = String(req.body?.password || '');
+  const key = `login:${req.ip}:${email}`;
+  if (auth.tooManyAttempts(key)) return res.status(429).json({ error: 'Demasiados intentos. Espera 15 minutos.' });
+
+  const user = email ? await repo.findUserByEmail(email) : null;
+  const ok = user ? await auth.checkPassword(password, user.password_hash) : false;
+  if (!ok) {
+    auth.recordAttempt(key);
+    return res.status(401).json({ error: 'Email o contraseña incorrectos' });
+  }
+  auth.clearAttempts(key);
+  auth.setSession(res, user.id);
+  res.json({ user: auth.publicUser(user) });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  auth.clearSession(res);
+  res.json({ success: true });
+});
 
 // ─── API: Generar caption con Groq Vision ────────────────────────────────────
 // Acepta una imagen ('image', compatibilidad) o varias ('images', carrusel).
@@ -153,6 +223,8 @@ app.post('/api/generate', uploadImages, async (req, res) => {
     const files = [...(req.files?.images || []), ...(req.files?.image || [])].slice(0, 10);
     if (!files.length) return res.status(400).json({ error: 'No se recibio imagen' });
 
+    const uid = req.user.id;
+    const [profile, voice] = await Promise.all([repo.getProfile(uid), repo.getVoice(uid)]);
     const isCarousel = files.length > 1;
     const seen = files.slice(0, MAX_VISION_IMAGES);
     const imageParts = seen.map(f => ({
@@ -174,7 +246,7 @@ app.post('/api/generate', uploadImages, async (req, res) => {
             type: 'text',
             text: `Eres community manager experto en Instagram para pymes hispanohablantes.
 
-${profileContext(loadProfile())}${voiceContext()}${carouselNote}Analiza la imagen y genera EXACTAMENTE 3 captions distintos listos para publicar en Instagram, en español. Cada uno debe tener un tono diferente: el primero inspiracional, el segundo cercano/conversacional, el tercero directo/comercial.
+${profileContext(profile)}${voiceContext(voice)}${carouselNote}Analiza la imagen y genera EXACTAMENTE 3 captions distintos listos para publicar en Instagram, en español. Cada uno debe tener un tono diferente: el primero inspiracional, el segundo cercano/conversacional, el tercero directo/comercial.
 
 Formato OBLIGATORIO — respeta los separadores exactos:
 
@@ -221,21 +293,11 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
     // Fallback: si el modelo no respetó el formato, devolver el texto completo como única opción
     const captionList = captions.length >= 2 ? captions : [raw.trim()];
 
-    // Guardar en historial con imagen en base64
-    const id = Date.now();
-    const imageFiles = files.map((f, i) => saveImage(i === 0 ? id : `${id}-${i + 1}`, f.buffer, f.mimetype));
-    const entry = {
-      id,
-      date: new Date().toISOString(),
-      caption: captionList[0],
-      imageFile: imageFiles[0],
-      ...(isCarousel ? { imageFiles } : {}),
-      status: 'pending'
-    };
-    history.unshift(entry);
-    saveHistory();
+    // Guardar la publicación (pendiente) con sus imágenes
+    const imageFiles = files.map(f => saveImage(uid, f.buffer, f.mimetype));
+    const post = await repo.createPost(uid, { caption: captionList[0], imageFiles, status: 'pending' });
 
-    res.json({ captions: captionList, id: entry.id });
+    res.json({ captions: captionList, id: post.id });
   } catch (err) {
     console.error('Error en /api/generate:', err.response?.data || err.message);
     res.status(500).json({ error: 'Error generando caption', detail: err.message });
@@ -250,7 +312,7 @@ app.post('/api/generate-image', express.json(), async (req, res) => {
       return res.status(400).json({ error: 'Describe qué imagen quieres generar' });
     }
 
-    const profile = loadProfile();
+    const profile = await repo.getProfile(req.user.id);
     const vertical = resolveVertical(profile.tipoNegocio);
     const prompt = buildImagePrompt(description, profile, vertical);
 
@@ -263,159 +325,152 @@ app.post('/api/generate-image', express.json(), async (req, res) => {
   }
 });
 
-// Límite de antelación para programar (el programador es persistente, así
-// que ya no depende de timers en memoria).
-const MAX_SCHEDULE_MS = 365 * 24 * 60 * 60 * 1000; // 1 año
-
-// Ejecuta la publicación real (demo o Meta Graph API) sobre una entrada del
-// historial. Se usa tanto para "publicar ahora" como para el disparo diferido
-// de una publicación programada.
-async function doPublish(entry, caption, imageBase64) {
-  entry = entry || {};
-  const files = entry.imageFiles?.length ? entry.imageFiles : (entry.imageFile ? [entry.imageFile] : []);
+// Ejecuta la publicación real (cuenta de Instagram del dueño del post, o
+// modo demo si no tiene ninguna conectada) y guarda el resultado.
+// La usan "publicar ahora", "publicar ya" desde el historial y el programador.
+async function doPublish(post) {
+  const conn = await repo.getIgConnection(post.userId);
+  const files = post.imageFiles || [];
   const publicUrls = ig.publicUrl() ? files.map(f => `${ig.publicUrl()}/api/images/${f}`) : [];
-  const imagePublicUrl = publicUrls[0] || null;
   const isCarousel = files.length > 1;
 
-  // 1) Cuenta conectada por OAuth (Instagram Login) — modo principal.
-  if (ig.isConnected()) {
-    if (!imagePublicUrl) {
-      entry.status = 'error';
-      return {
+  let result, patch;
+
+  if (ig.isConnected(conn)) {
+    if (!publicUrls.length) {
+      result = {
         success: false,
         error: 'Falta la URL pública de la imagen',
         detail: 'Configura PUBLIC_URL en el .env para que Meta pueda descargar la imagen.'
       };
+      patch = { status: 'error', errorDetail: result.detail };
+    } else {
+      try {
+        const { containerId, mediaId } = isCarousel
+          ? await ig.publishCarousel(conn, publicUrls, post.caption)
+          : await ig.publishImage(conn, publicUrls[0], post.caption);
+        result = {
+          success: true, containerId, mediaId,
+          message: isCarousel ? `¡Carrusel de ${files.length} fotos publicado en Instagram!` : '¡Publicado en Instagram!'
+        };
+        patch = { status: 'published', publishedAt: new Date().toISOString(), igMediaId: mediaId, errorDetail: null };
+      } catch (err) {
+        console.error(`Error publicando (usuario ${post.userId}):`, err.response?.data || err.message);
+        result = { success: false, error: 'Error publicando en Instagram', detail: ig.graphError(err) };
+        patch = { status: 'error', errorDetail: result.detail };
+      }
     }
-    try {
-      const { containerId, mediaId } = isCarousel
-        ? await ig.publishCarousel(publicUrls, caption)
-        : await ig.publishImage(imagePublicUrl, caption);
-      entry.status = 'published';
-      entry.publishedAt = new Date().toISOString();
-      entry.igMediaId = mediaId;
-      return { success: true, containerId, mediaId, message: isCarousel ? `¡Carrusel de ${files.length} fotos publicado en Instagram!` : '¡Publicado en Instagram!' };
-    } catch (err) {
-      entry.status = 'error';
-      const detail = ig.graphError(err);
-      console.error('Error publicando (Instagram Login):', err.response?.data || err.message);
-      return { success: false, error: 'Error publicando en Instagram', detail };
-    }
+  } else {
+    // Sin cuenta conectada → modo demo.
+    result = {
+      success: true,
+      demo: true,
+      message: 'Modo demo: conecta tu Instagram en Perfil de marca para publicar de verdad. El caption se aprobó correctamente.'
+    };
+    patch = { status: 'published_demo', publishedAt: new Date().toISOString(), errorDetail: null };
   }
 
-  // 2) Token fijo en .env (META_ACCESS_TOKEN + META_INSTAGRAM_ACCOUNT_ID) — modo antiguo.
-  if (process.env.META_ACCESS_TOKEN && process.env.META_INSTAGRAM_ACCOUNT_ID) {
-    if (isCarousel) {
-      entry.status = 'error';
-      return { success: false, error: 'Carrusel no disponible en este modo', detail: 'Conecta tu Instagram en Perfil de marca para publicar carruseles.' };
-    }
-    try {
-      const containerRes = await axios.post(
-        `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media`,
-        { image_url: imagePublicUrl || imageBase64, caption, access_token: process.env.META_ACCESS_TOKEN }
-      );
-      const containerId = containerRes.data.id;
-      await axios.post(
-        `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media_publish`,
-        { creation_id: containerId, access_token: process.env.META_ACCESS_TOKEN }
-      );
-      entry.status = 'published';
-      entry.publishedAt = new Date().toISOString();
-      return { success: true, containerId, message: '¡Publicado en Instagram!' };
-    } catch (err) {
-      entry.status = 'error';
-      console.error('Error en doPublish:', err.response?.data || err.message);
-      return { success: false, error: 'Error publicando en Instagram', detail: ig.graphError(err) };
-    }
-  }
-
-  // 3) Sin conexión → modo demo.
-  entry.status = 'published_demo';
-  entry.publishedAt = new Date().toISOString();
-  return {
-    success: true,
-    demo: true,
-    message: 'Modo demo: conecta tu Instagram en Perfil de marca para publicar de verdad. El caption se aprobó correctamente.'
-  };
+  const updated = await repo.updatePost(post.userId, post.id, patch);
+  return { ...result, post: updated };
 }
 
-// ─── API: Publicar o programar en Instagram ──────────────────────────────────
-app.post('/api/publish', async (req, res) => {
-  const { id, caption, originalCaption, imageBase64, mimeType, scheduledFor } = req.body;
+// Límite de antelación para programar.
+const MAX_SCHEDULE_MS = 365 * 24 * 60 * 60 * 1000; // 1 año
 
-  const entry = findEntry(id);
-  if (entry) { entry.caption = caption; delete entry.errorDetail; }
+function checkScheduleDate(value) {
+  const d = new Date(value);
+  const delay = d.getTime() - Date.now();
+  if (isNaN(delay)) return { error: 'Fecha no válida' };
+  if (delay <= 60000) return { error: 'Elige una hora al menos 1 minuto en el futuro' };
+  if (delay > MAX_SCHEDULE_MS) return { error: 'Solo se puede programar hasta 1 año vista' };
+  return { date: d };
+}
 
-  // Guardar par para aprendizaje de voz (solo si el usuario editó)
-  let voiceExamples = 0;
-  if (originalCaption && caption && originalCaption.trim() !== caption.trim()) {
-    const voice = loadVoice();
-    voice.examples.push({ original: originalCaption.trim(), final: caption.trim(), date: new Date().toISOString() });
-    saveVoice(voice);
-    voiceExamples = voice.examples.length;
+function checkCaption(caption) {
+  if (!String(caption || '').trim()) return 'El caption no puede estar vacío';
+  if (String(caption).length > 2200) return 'Instagram admite como máximo 2200 caracteres';
+  return null;
+}
 
-    // Analizar patrones a partir de 3 ejemplos (en background, sin bloquear respuesta)
-    if (voiceExamples >= 3) {
-      analyzeVoice(voice.examples).then(patterns => {
-        const v = loadVoice();
-        v.patterns = patterns;
-        v.lastAnalyzed = new Date().toISOString();
-        saveVoice(v);
-        console.log(`Voz actualizada con ${voiceExamples} ejemplos`);
-      }).catch(err => console.error('Error analizando voz:', err.message));
-    }
+// Guarda el par (caption IA → caption editado) para aprender la voz del
+// usuario. A partir de 3 ejemplos analiza patrones en segundo plano.
+async function learnVoice(uid, originalCaption, caption) {
+  if (!originalCaption || !caption || originalCaption.trim() === caption.trim()) return 0;
+  const voice = await repo.getVoice(uid);
+  voice.examples = [...(voice.examples || []), { original: originalCaption.trim(), final: caption.trim(), date: new Date().toISOString() }];
+  await repo.saveVoice(uid, voice);
+  const n = voice.examples.length;
+  if (n >= 3) {
+    analyzeVoice(voice.examples).then(async patterns => {
+      const v = await repo.getVoice(uid);
+      v.patterns = patterns;
+      v.lastAnalyzed = new Date().toISOString();
+      await repo.saveVoice(uid, v);
+      console.log(`Voz del usuario ${uid} actualizada con ${n} ejemplos`);
+    }).catch(err => console.error('Error analizando voz:', err.message));
   }
+  return n;
+}
 
-  // ¿Publicación programada para el futuro?
-  const scheduledDate = scheduledFor ? new Date(scheduledFor) : null;
-  const delay = scheduledDate ? scheduledDate.getTime() - Date.now() : 0;
+// ─── API: Publicar o programar (desde el Estudio) ────────────────────────────
+const EDITABLE = ['pending', 'scheduled', 'error', 'rejected'];
 
-  if (scheduledDate && !isNaN(delay) && delay > 60000 && delay <= MAX_SCHEDULE_MS) {
-    if (!entry) {
-      return res.status(404).json({ success: false, error: 'No se encontró la publicación a programar' });
-    }
-    entry.status = 'scheduled';
-    entry.scheduledFor = scheduledDate.toISOString();
-    saveHistory();
+app.post('/api/publish', async (req, res) => {
+  const uid = req.user.id;
+  const { id, caption, originalCaption, scheduledFor } = req.body || {};
 
+  const post = await repo.getPost(uid, id);
+  if (!post) return res.status(404).json({ success: false, error: 'No se encontró la publicación' });
+  if (!EDITABLE.includes(post.status)) {
+    return res.status(409).json({ success: false, error: 'Esta publicación ya se publicó o se está publicando' });
+  }
+  const capErr = checkCaption(caption);
+  if (capErr) return res.status(400).json({ success: false, error: capErr });
+
+  const voiceExamples = await learnVoice(uid, originalCaption, caption);
+
+  // ¿Programada para el futuro?
+  if (scheduledFor) {
+    const { date, error } = checkScheduleDate(scheduledFor);
+    if (error) return res.status(400).json({ success: false, error });
+    await repo.updatePost(uid, post.id, { caption, status: 'scheduled', scheduledFor: date.toISOString(), errorDetail: null });
     return res.json({
       success: true,
       scheduled: true,
-      scheduledFor: entry.scheduledFor,
+      scheduledFor: date.toISOString(),
       voiceExamples,
-      message: `Publicación programada para el ${scheduledDate.toLocaleString('es-ES')}.`
+      message: `Publicación programada para el ${date.toLocaleString('es-ES', { timeZone: process.env.TZ || 'Atlantic/Canary' })}.`
     });
   }
 
   // Publicación inmediata
-  if (entry) { entry.status = 'publishing'; saveHistory(); }
-  const result = await doPublish(entry, caption, imageBase64);
-  if (entry) { if (!result.success) entry.errorDetail = result.detail; saveHistory(); }
+  const claimed = await repo.transitionPost(uid, post.id, EDITABLE, { status: 'publishing', caption, scheduledFor: null, errorDetail: null });
+  if (!claimed) return res.status(409).json({ success: false, error: 'Esta publicación ya se está publicando' });
+  const { post: _published, ...result } = await doPublish(claimed);
   if (!result.success) return res.status(500).json(result);
   res.json({ ...result, voiceExamples });
 });
 
 // ─── API: Rechazar ───────────────────────────────────────────────────────────
-app.post('/api/reject', (req, res) => {
-  const { id } = req.body;
-  const entry = findEntry(id);
-  if (entry) { entry.status = 'rejected'; saveHistory(); }
+app.post('/api/reject', async (req, res) => {
+  const post = await repo.getPost(req.user.id, req.body?.id);
+  if (post && EDITABLE.includes(post.status)) {
+    await repo.updatePost(req.user.id, post.id, { status: 'rejected', scheduledFor: null });
+  }
   res.json({ success: true });
 });
 
 // ─── API: Cancelar una publicación programada ───────────────────────────────
-app.post('/api/unschedule', (req, res) => {
-  const entry = findEntry(req.body.id);
-  if (!entry || entry.status !== 'scheduled') {
+app.post('/api/unschedule', async (req, res) => {
+  const post = await repo.getPost(req.user.id, req.body?.id);
+  if (!post || post.status !== 'scheduled') {
     return res.status(400).json({ success: false, error: 'Esta publicación no está programada' });
   }
-  entry.status = 'pending';
-  delete entry.scheduledFor;
-  saveHistory();
+  await repo.updatePost(req.user.id, post.id, { status: 'pending', scheduledFor: null });
   res.json({ success: true });
 });
 
-// ─── API: Imágenes del historial ─────────────────────────────────────────────
+// ─── API: Imágenes (públicas: Meta las descarga para publicar) ───────────────
 app.get('/api/images/:file', (req, res) => {
   const p = imagePath(req.params.file);
   if (!p) return res.status(404).end();
@@ -435,20 +490,22 @@ app.get('/api/verticals', (req, res) => {
   })));
 });
 
-// ─── API: Conexión con Instagram (OAuth) ─────────────────────────────────────
+// ─── API: Conexión con Instagram (OAuth, una cuenta por usuario) ─────────────
 // A dónde volver tras el OAuth: el frontend (en dev, Vite en :5173).
 function appUrl() {
   return (process.env.APP_URL || (IS_PROD ? ig.publicUrl() : 'http://localhost:5173')).replace(/\/+$/, '');
 }
 
-app.get('/api/instagram/status', (req, res) => res.json(ig.publicStatus()));
+app.get('/api/instagram/status', async (req, res) => {
+  res.json(ig.publicStatus(await repo.getIgConnection(req.user.id)));
+});
 
 app.get('/api/instagram/connect', (req, res) => {
   const missing = ig.missingConfig();
   if (missing.length) {
     return res.status(400).json({ error: `Faltan variables en el .env: ${missing.join(', ')}`, missing });
   }
-  res.json({ url: ig.buildAuthUrl() });
+  res.json({ url: ig.buildAuthUrl(req.user.id) });
 });
 
 app.get('/api/instagram/callback', async (req, res) => {
@@ -457,11 +514,13 @@ app.get('/api/instagram/callback', async (req, res) => {
 
   const { code, state, error, error_description } = req.query;
   if (error) return back('error', error_description || 'Autorización cancelada');
-  if (!code || !ig.consumeState(state)) return back('error', 'La sesión de conexión caducó. Vuelve a intentarlo.');
+  const userId = code ? ig.consumeState(state) : null;
+  if (!userId) return back('error', 'La sesión de conexión caducó. Vuelve a intentarlo.');
 
   try {
     const conn = await ig.completeOAuth(code);
-    console.log(`[instagram] Conectada @${conn.username}`);
+    await repo.saveIgConnection(userId, conn);
+    console.log(`[instagram] Usuario ${userId} conectó @${conn.username}`);
     back('connected');
   } catch (err) {
     console.error('[instagram] Error en OAuth:', err.response?.data || err.message);
@@ -469,17 +528,36 @@ app.get('/api/instagram/callback', async (req, res) => {
   }
 });
 
-app.post('/api/instagram/disconnect', (req, res) => {
-  ig.clearConnection();
+app.post('/api/instagram/disconnect', async (req, res) => {
+  await repo.deleteIgConnection(req.user.id);
   res.json({ success: true });
 });
 
-// ─── API: Perfil de marca ────────────────────────────────────────────────────
-app.get('/api/profile', (req, res) => res.json(loadProfile()));
-
-app.post('/api/profile', express.json(), (req, res) => {
+// Renovación automática de los tokens de todas las cuentas (cada 12 h).
+async function refreshAllTokens() {
   try {
-    fs.writeFileSync(PROFILE_PATH, JSON.stringify(req.body, null, 2), 'utf8');
+    for (const row of await repo.allIgConnections()) {
+      const renewed = await ig.refreshIfNeeded(row.data);
+      if (renewed) {
+        await repo.saveIgConnection(row.user_id, renewed);
+        console.log(`[instagram] Token de @${renewed.username} renovado, caduca el ${renewed.expiresAt}`);
+      }
+    }
+  } catch (err) {
+    console.error('[instagram] Error renovando tokens:', err.message);
+  }
+}
+
+// ─── API: Perfil de marca ────────────────────────────────────────────────────
+app.get('/api/profile', async (req, res) => res.json(await repo.getProfile(req.user.id)));
+
+app.post('/api/profile', async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ error: 'Perfil no válido' });
+    }
+    await repo.saveProfile(req.user.id, body);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'No se pudo guardar el perfil' });
@@ -487,99 +565,101 @@ app.post('/api/profile', express.json(), (req, res) => {
 });
 
 // ─── API: Voz aprendida ──────────────────────────────────────────────────────
-app.get('/api/voice', (req, res) => {
-  const { examples, patterns, lastAnalyzed } = loadVoice();
+app.get('/api/voice', async (req, res) => {
+  const { examples = [], patterns = null, lastAnalyzed = null } = await repo.getVoice(req.user.id);
   res.json({ count: examples.length, patterns, lastAnalyzed });
 });
 
 // ─── API: Historial ──────────────────────────────────────────────────────────
-function publicItem(h) {
+function publicItem(p) {
   return {
-    id: h.id,
-    date: h.date,
-    caption: h.caption,
-    status: h.status,
-    image: h.imageFile ? `/api/images/${h.imageFile}` : h.image,
-    images: (h.imageFiles || (h.imageFile ? [h.imageFile] : [])).map(f => `/api/images/${f}`),
-    scheduledFor: h.scheduledFor || null,
-    publishedAt: h.publishedAt || null,
-    publishedLate: !!h.publishedLate,
-    errorDetail: h.errorDetail || null
+    id: p.id,
+    date: p.createdAt,
+    caption: p.caption,
+    status: p.status,
+    image: p.imageFiles[0] ? `/api/images/${p.imageFiles[0]}` : null,
+    images: p.imageFiles.map(f => `/api/images/${f}`),
+    scheduledFor: p.scheduledFor,
+    publishedAt: p.publishedAt,
+    publishedLate: p.publishedLate,
+    errorDetail: p.errorDetail || null
   };
 }
 
-app.get('/api/history', (req, res) => {
-  res.json(history.map(publicItem));
+app.get('/api/history', async (req, res) => {
+  res.json((await repo.listPosts(req.user.id)).map(publicItem));
 });
 
 // ─── API: Gestionar una publicación (editar, publicar ya, borrar) ────────────
-// Se pueden tocar las que aún no se han publicado.
-const EDITABLE = ['pending', 'scheduled', 'error', 'rejected'];
-
 // Editar caption y/o fecha. scheduledFor: ISO → programar/reprogramar;
 // null → quitar la programación (queda pendiente).
-app.patch('/api/posts/:id', (req, res) => {
-  const entry = findEntry(req.params.id);
-  if (!entry) return res.status(404).json({ error: 'No se encontró la publicación' });
-  if (!EDITABLE.includes(entry.status)) {
+app.patch('/api/posts/:id', async (req, res) => {
+  const uid = req.user.id;
+  const post = await repo.getPost(uid, req.params.id);
+  if (!post) return res.status(404).json({ error: 'No se encontró la publicación' });
+  if (!EDITABLE.includes(post.status)) {
     return res.status(409).json({ error: 'Esta publicación ya no se puede modificar' });
   }
   const { caption, scheduledFor } = req.body || {};
+  const patch = { errorDetail: null, publishedLate: false };
 
   if (caption !== undefined) {
-    if (!String(caption).trim()) return res.status(400).json({ error: 'El caption no puede estar vacío' });
-    if (String(caption).length > 2200) return res.status(400).json({ error: 'Instagram admite como máximo 2200 caracteres' });
-    entry.caption = String(caption);
+    const capErr = checkCaption(caption);
+    if (capErr) return res.status(400).json({ error: capErr });
+    patch.caption = String(caption);
   }
 
   if (scheduledFor !== undefined) {
     if (scheduledFor === null || scheduledFor === '') {
-      delete entry.scheduledFor;
-      entry.status = 'pending';
+      patch.scheduledFor = null;
+      patch.status = 'pending';
     } else {
-      const d = new Date(scheduledFor);
-      const delay = d.getTime() - Date.now();
-      if (isNaN(delay)) return res.status(400).json({ error: 'Fecha no válida' });
-      if (delay <= 60000) return res.status(400).json({ error: 'Elige una hora al menos 1 minuto en el futuro' });
-      if (delay > MAX_SCHEDULE_MS) return res.status(400).json({ error: 'Solo se puede programar hasta 1 año vista' });
-      entry.scheduledFor = d.toISOString();
-      entry.status = 'scheduled';
+      const { date, error } = checkScheduleDate(scheduledFor);
+      if (error) return res.status(400).json({ error });
+      patch.scheduledFor = date.toISOString();
+      patch.status = 'scheduled';
     }
-  } else if (entry.status === 'error' || entry.status === 'rejected') {
-    entry.status = 'pending'; // tras corregirla vuelve a estar lista
+  } else if (post.status === 'error' || post.status === 'rejected') {
+    patch.status = 'pending'; // tras corregirla vuelve a estar lista
   }
-  delete entry.errorDetail;
-  delete entry.publishedLate;
-  saveHistory();
-  res.json({ success: true, item: publicItem(entry) });
+
+  // Solo si nadie la ha empezado a publicar mientras tanto.
+  const updated = patch.status
+    ? await repo.transitionPost(uid, post.id, EDITABLE, patch)
+    : await repo.updatePost(uid, post.id, patch);
+  if (!updated) return res.status(409).json({ error: 'La publicación cambió mientras la editabas; recarga' });
+  res.json({ success: true, item: publicItem(updated) });
 });
 
 // Publicar ya (también sirve para adelantar una programada o reintentar un error).
 app.post('/api/posts/:id/publish', async (req, res) => {
-  const entry = findEntry(req.params.id);
-  if (!entry) return res.status(404).json({ error: 'No se encontró la publicación' });
-  if (!EDITABLE.includes(entry.status)) {
-    return res.status(409).json({ error: 'Esta publicación ya se publicó o se está publicando' });
-  }
-  delete entry.scheduledFor;
-  delete entry.errorDetail;
-  entry.status = 'publishing';
-  saveHistory();
-  const result = await doPublish(entry, entry.caption, entry.imageFile ? imageDataUrl(entry.imageFile) : entry.image);
-  if (!result.success) entry.errorDetail = result.detail;
-  saveHistory();
-  res.status(result.success ? 200 : 500).json({ ...result, item: publicItem(entry) });
+  const uid = req.user.id;
+  const post = await repo.getPost(uid, req.params.id);
+  if (!post) return res.status(404).json({ error: 'No se encontró la publicación' });
+  const claimed = await repo.transitionPost(uid, post.id, EDITABLE, { status: 'publishing', scheduledFor: null, errorDetail: null });
+  if (!claimed) return res.status(409).json({ error: 'Esta publicación ya se publicó o se está publicando' });
+  const { post: updated, ...result } = await doPublish(claimed);
+  res.status(result.success ? 200 : 500).json({ ...result, item: publicItem(updated) });
 });
 
 // Borrar de Qubia Craft (no borra nada que ya esté en Instagram).
-app.delete('/api/posts/:id', (req, res) => {
-  const entry = findEntry(req.params.id);
-  if (!entry) return res.status(404).json({ error: 'No se encontró la publicación' });
-  if (entry.status === 'publishing') {
+app.delete('/api/posts/:id', async (req, res) => {
+  const uid = req.user.id;
+  const post = await repo.getPost(uid, req.params.id);
+  if (!post) return res.status(404).json({ error: 'No se encontró la publicación' });
+  if (post.status === 'publishing') {
     return res.status(409).json({ error: 'Se está publicando ahora mismo; espera a que termine' });
   }
-  deleteEntry(entry.id);
+  const deleted = await repo.deletePost(uid, post.id);
+  if (deleted) deleteImages(deleted.imageFiles);
   res.json({ success: true });
+});
+
+// Errores no controlados en rutas async → 500 en JSON (no tumban el servidor).
+app.use('/api', (err, req, res, next) => {
+  console.error('Error en', req.method, req.path, '→', err.message);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: 'Error interno del servidor' });
 });
 
 // ─── Servir frontend en produccion ───────────────────────────────────────────
@@ -591,9 +671,18 @@ if (IS_PROD) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`Qubia Craft corriendo en http://localhost:${PORT}`);
-  if (!IS_PROD) console.log(`Frontend dev: http://localhost:5173`);
-  ig.startTokenRefresher();
-  startScheduler(entry => doPublish(entry, entry.caption, entry.imageFile ? imageDataUrl(entry.imageFile) : entry.image));
+async function start() {
+  await initDb();
+  app.listen(PORT, () => {
+    console.log(`Qubia Craft corriendo en http://localhost:${PORT}`);
+    if (!IS_PROD) console.log(`Frontend dev: http://localhost:5173`);
+  });
+  refreshAllTokens();
+  setInterval(refreshAllTokens, 12 * 60 * 60 * 1000);
+  await startScheduler(doPublish);
+}
+
+start().catch(err => {
+  console.error('No se pudo arrancar Qubia Craft:', err);
+  process.exit(1);
 });

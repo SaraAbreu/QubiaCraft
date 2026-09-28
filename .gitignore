@@ -10,3 +10,7 @@ server/data/
 # Imágenes sueltas de referencia (no se suben)
 /*.jpeg
 /*.jfif
+
+# Datos de la versión anterior ya migrados a la base de datos
+server/*.migrated
+.test/
