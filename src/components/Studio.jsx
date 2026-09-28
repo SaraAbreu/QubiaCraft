@@ -52,6 +52,8 @@ async function compressImage(f, maxPx = 1200, quality = 0.85) {
   });
 }
 
+const MAX_IMAGES = 10;
+
 function next7Days() {
   const days = [];
   const now = new Date();
@@ -71,8 +73,12 @@ export default function Studio({ onOpenSettings }) {
   const [historyLoading, setHistoryLoading] = useState(true);
 
   // Panel 1 — imagen
-  const [file, setFile] = useState(null);
-  const [preview, setPreview] = useState(null);
+  // Una o varias imágenes (carrusel, máx. 10 — límite de la API de Meta).
+  const [items, setItems] = useState([]); // [{ file, url }]
+  const [activeIdx, setActiveIdx] = useState(0);
+  const file = items[0]?.file || null;
+  const preview = items[Math.min(activeIdx, items.length - 1)]?.url || null;
+  const isCarousel = items.length > 1;
   const [dragging, setDragging] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState('');
@@ -153,28 +159,67 @@ export default function Studio({ onOpenSettings }) {
     });
   }, [history]);
 
-  function handleFile(f) {
-    if (!f || !f.type.startsWith('image/')) {
-      setGenError('Por favor sube una imagen (JPG, PNG, WEBP)');
-      return;
-    }
-    setFile(f);
-    setGenError('');
-    setPreview(URL.createObjectURL(f));
+  // Cualquier cambio en las fotos invalida el contenido ya generado.
+  function invalidateContent() {
     setCaptions([]);
     setJobId(null);
     setResult(null);
   }
 
+  function addFiles(list) {
+    const all = Array.from(list || []);
+    const imgs = all.filter(f => f && f.type.startsWith('image/'));
+    if (!imgs.length) {
+      setGenError('Por favor sube una imagen (JPG, PNG, WEBP)');
+      return;
+    }
+    const room = MAX_IMAGES - items.length;
+    const accepted = imgs.slice(0, Math.max(room, 0));
+    setGenError(
+      imgs.length > accepted.length ? `Máximo ${MAX_IMAGES} imágenes por carrusel: se añadieron ${accepted.length}.`
+      : imgs.length < all.length ? 'Algunos archivos no eran imágenes y se ignoraron.'
+      : ''
+    );
+    if (!accepted.length) return;
+    setItems(prev => [...prev, ...accepted.map(f => ({ file: f, url: URL.createObjectURL(f) }))]);
+    setAiMode(false);
+    invalidateContent();
+  }
+
+  // Compatibilidad: la imagen generada con IA entra por aquí.
+  function handleFile(f) { addFiles([f]); }
+
+  function removeItem(i) {
+    setItems(prev => {
+      URL.revokeObjectURL(prev[i]?.url);
+      return prev.filter((_, j) => j !== i);
+    });
+    setActiveIdx(0);
+    invalidateContent();
+  }
+
+  function moveItem(i, dir) {
+    const j = i + dir;
+    if (j < 0 || j >= items.length) return;
+    setItems(prev => {
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+    setActiveIdx(j);
+    invalidateContent();
+  }
+
   function onDrop(e) {
     e.preventDefault();
     setDragging(false);
-    handleFile(e.dataTransfer.files[0]);
+    addFiles(e.dataTransfer.files);
   }
 
   function resetAll() {
-    setFile(null);
-    setPreview(null);
+    items.forEach(it => URL.revokeObjectURL(it.url));
+    setItems([]);
+    setActiveIdx(0);
     setCaptions([]);
     setJobId(null);
     setCaption('');
@@ -189,6 +234,9 @@ export default function Studio({ onOpenSettings }) {
   }
 
   async function generateAiImage() {
+    // Con foto propia nunca se genera imagen: la IA de imagen solo se usa
+    // cuando no hay ninguna imagen cargada.
+    if (file) { setAiMode(false); return; }
     if (!aiDescription.trim()) {
       setGenError('Describe qué imagen quieres generar');
       return;
@@ -222,9 +270,8 @@ export default function Studio({ onOpenSettings }) {
     setGenerating(true);
     setGenError('');
     try {
-      const compressed = await compressImage(file);
       const form = new FormData();
-      form.append('image', compressed);
+      for (const it of items) form.append('images', await compressImage(it.file));
       const res = await fetch('/api/generate', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error generando caption');
@@ -264,7 +311,7 @@ export default function Studio({ onOpenSettings }) {
     setPublishing(true);
     setPubError('');
     try {
-      const body = { id: jobId, caption, originalCaption, imageBase64: preview };
+      const body = { id: jobId, caption, originalCaption, imageBase64: items[0]?.url };
       if (mode === 'schedule') {
         if (!scheduledFor) { setPubError('Elige una fecha y hora para programar'); setPublishing(false); return; }
         body.scheduledFor = new Date(scheduledFor).toISOString();
@@ -377,7 +424,7 @@ export default function Studio({ onOpenSettings }) {
                     <button className="btn btn-primary generate-btn" onClick={generateAiImage} disabled={aiGenerating}>
                       {aiGenerating ? <><span className="spinner" /> Generando imagen…</> : '✨ Generar imagen con IA'}
                     </button>
-                    <p className="ai-image-hint">Gratis, sin API key — puede tardar unos segundos.</p>
+                    <p className="ai-image-hint">Usa tu saldo de Pollinations — puede tardar unos segundos. Si ya tienes foto, súbela y no se genera nada.</p>
                   </div>
                 ) : (
                   <div
@@ -388,15 +435,16 @@ export default function Studio({ onOpenSettings }) {
                     onClick={() => inputRef.current.click()}
                   >
                     <div className="drop-icon">📸</div>
-                    <p className="drop-title">Arrastra una imagen aquí</p>
+                    <p className="drop-title">Arrastra una o varias imágenes</p>
                     <p className="drop-sub">o haz clic para seleccionar</p>
-                    <p className="drop-hint">JPG, PNG, WEBP · Máx. 20MB</p>
+                    <p className="drop-hint">JPG, PNG, WEBP · Hasta {MAX_IMAGES} fotos = carrusel</p>
                     <input
                       ref={inputRef}
                       type="file"
                       accept="image/*"
+                      multiple
                       style={{ display: 'none' }}
-                      onChange={e => handleFile(e.target.files[0])}
+                      onChange={e => { addFiles(e.target.files); e.target.value = ''; }}
                     />
                   </div>
                 )}
@@ -405,8 +453,37 @@ export default function Studio({ onOpenSettings }) {
               <div className="preview-block">
                 <div className="preview-image-wrap">
                   <img src={preview} alt="Preview" className="preview-image" />
-                  <button className="preview-remove" onClick={resetAll} title="Cambiar imagen">✕</button>
+                  {isCarousel && <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>}
+                  <button className="preview-remove" onClick={resetAll} title="Quitar todas">✕</button>
                 </div>
+
+                <div className="thumb-strip">
+                  {items.map((it, i) => (
+                    <div key={it.url} className={`thumb ${i === activeIdx ? 'active' : ''}`}>
+                      <img src={it.url} alt={`Foto ${i + 1}`} onClick={() => setActiveIdx(i)} />
+                      <span className="thumb-num">{i + 1}</span>
+                      {isCarousel && (
+                        <div className="thumb-actions">
+                          <button onClick={() => moveItem(i, -1)} disabled={i === 0} title="Mover a la izquierda">‹</button>
+                          <button onClick={() => removeItem(i)} title="Quitar">✕</button>
+                          <button onClick={() => moveItem(i, 1)} disabled={i === items.length - 1} title="Mover a la derecha">›</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {items.length < MAX_IMAGES && (
+                    <button className="thumb thumb-add" onClick={() => inputRef.current.click()} title="Añadir fotos">+</button>
+                  )}
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={e => { addFiles(e.target.files); e.target.value = ''; }}
+                  />
+                </div>
+                {isCarousel && <p className="carousel-hint">Carrusel de {items.length} fotos · la IA analiza las 3 primeras. Instagram recorta todas a la proporción de la primera.</p>}
                 <button className="btn btn-primary generate-btn" onClick={generate} disabled={generating}>
                   {generating ? <><span className="spinner" /> Generando…</> : captions.length ? '🔄 Regenerar contenido' : '✨ Generar contenido'}
                 </button>
@@ -456,7 +533,21 @@ export default function Studio({ onOpenSettings }) {
                     </div>
                     <span className="ig-more">•••</span>
                   </div>
-                  <img src={preview} alt="Post" className="ig-image" />
+                  <div className="ig-media">
+                    <img src={preview} alt="Post" className="ig-image" />
+                    {isCarousel && (
+                      <>
+                        <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>
+                        {activeIdx > 0 && <button className="ig-nav prev" onClick={() => setActiveIdx(activeIdx - 1)}>‹</button>}
+                        {activeIdx < items.length - 1 && <button className="ig-nav next" onClick={() => setActiveIdx(activeIdx + 1)}>›</button>}
+                      </>
+                    )}
+                  </div>
+                  {isCarousel && (
+                    <div className="ig-dots">
+                      {items.map((_, i) => <span key={i} className={i === activeIdx ? 'on' : ''} />)}
+                    </div>
+                  )}
                   <div className="ig-caption-preview">
                     <span className="ig-caption-user">{igUser}</span>{' '}
                     <span className="ig-caption-text">{caption.split('\n')[0].slice(0, 90)}</span>

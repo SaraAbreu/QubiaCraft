@@ -123,3 +123,8 @@
 
 .detail-note { font-size: 13px; color: var(--text2); margin-bottom: 16px; }
 .detail-error { color: var(--danger); }
+
+/* Carrusel */
+.badge-carousel { margin-left: 6px; background: rgba(23,195,198,0.15); color: var(--accent2); }
+.detail-thumbs { display: flex; gap: 6px; overflow-x: auto; margin: 8px 0; }
+.detail-thumbs img { flex: 0 0 56px; height: 56px; object-fit: cover; border-radius: 6px; }

@@ -182,27 +182,65 @@ export function startTokenRefresher() {
 // ─── Publicación ────────────────────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// imageUrl debe ser una URL pública (https) accesible por Meta.
-export async function publishImage(imageUrl, caption) {
+// Espera a que Meta termine de procesar un contenedor (normalmente inmediato).
+async function waitForContainer(creationId, token) {
+  for (let i = 0; i < 15; i++) {
+    const st = await axios.get(`${GRAPH}/${API_VERSION}/${creationId}`, {
+      params: { fields: 'status_code', access_token: token },
+    });
+    const code = st.data.status_code;
+    if (code === 'FINISHED' || !code) return;
+    if (code === 'ERROR' || code === 'EXPIRED') throw new Error(`Meta no pudo procesar la imagen (${code})`);
+    await sleep(2000);
+  }
+}
+
+function requireConnection() {
   const c = loadConnection();
   if (!c?.accessToken) throw new Error('No hay ninguna cuenta de Instagram conectada');
+  return c;
+}
 
+// imageUrl debe ser una URL pública (https) accesible por Meta.
+export async function publishImage(imageUrl, caption) {
+  const c = requireConnection();
   const base = `${GRAPH}/${API_VERSION}/${c.igUserId}`;
   const container = await axios.post(`${base}/media`, null, {
     params: { image_url: imageUrl, caption, access_token: c.accessToken },
   });
   const creationId = container.data.id;
+  await waitForContainer(creationId, c.accessToken);
 
-  // Esperar a que Meta procese la imagen (normalmente es inmediato).
-  for (let i = 0; i < 10; i++) {
-    const st = await axios.get(`${GRAPH}/${API_VERSION}/${creationId}`, {
-      params: { fields: 'status_code', access_token: c.accessToken },
+  const pub = await axios.post(`${base}/media_publish`, null, {
+    params: { creation_id: creationId, access_token: c.accessToken },
+  });
+  return { containerId: creationId, mediaId: pub.data.id };
+}
+
+// Carrusel: de 2 a 10 imágenes (límite de la API de Meta). Se crea un
+// contenedor por imagen (is_carousel_item) y luego el contenedor CAROUSEL
+// que las agrupa, en el orden recibido.
+export const CAROUSEL_MAX = 10;
+export async function publishCarousel(imageUrls, caption) {
+  if (imageUrls.length < 2) return publishImage(imageUrls[0], caption);
+  if (imageUrls.length > CAROUSEL_MAX) throw new Error(`Un carrusel admite como máximo ${CAROUSEL_MAX} imágenes`);
+  const c = requireConnection();
+  const base = `${GRAPH}/${API_VERSION}/${c.igUserId}`;
+
+  const children = [];
+  for (const url of imageUrls) {
+    const child = await axios.post(`${base}/media`, null, {
+      params: { image_url: url, is_carousel_item: true, access_token: c.accessToken },
     });
-    const code = st.data.status_code;
-    if (code === 'FINISHED' || !code) break;
-    if (code === 'ERROR' || code === 'EXPIRED') throw new Error(`Meta no pudo procesar la imagen (${code})`);
-    await sleep(2000);
+    await waitForContainer(child.data.id, c.accessToken);
+    children.push(child.data.id);
   }
+
+  const container = await axios.post(`${base}/media`, null, {
+    params: { media_type: 'CAROUSEL', children: children.join(','), caption, access_token: c.accessToken },
+  });
+  const creationId = container.data.id;
+  await waitForContainer(creationId, c.accessToken);
 
   const pub = await axios.post(`${base}/media_publish`, null, {
     params: { creation_id: creationId, access_token: c.accessToken },

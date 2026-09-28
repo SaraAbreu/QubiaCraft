@@ -17,6 +17,33 @@ import * as ig from './services/instagram.js';
 // prompt, campos de perfil extra, estilo de imagen y ejemplos. 'generico' es
 // el fallback para cualquier tipo de negocio sin módulo dedicado.
 
+// Modelo de visión de Groq. llama-4-scout fue retirado (model_not_found);
+// se puede cambiar sin tocar código con GROQ_VISION_MODEL en el .env.
+const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.8-27b';
+
+// Los modelos Qwen de Groq "piensan" por defecto: lo desactivamos para que
+// la respuesta sea solo el caption (y más rápida).
+function groqReasoningOpts() {
+  return GROQ_VISION_MODEL.startsWith('qwen/') ? { reasoning_effort: 'none' } : {};
+}
+
+// Por si algún modelo devuelve igualmente su razonamiento entre <think>…</think>.
+function stripThinking(text = '') {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
+// Qwen a veces "se cuela" al chino a mitad de frase. Mensaje de sistema que
+// fija el idioma + detección de caracteres chinos/japoneses/coreanos.
+const SPANISH_ONLY = {
+  role: 'system',
+  content: 'Responde SIEMPRE y ÚNICAMENTE en español de España. Nunca uses chino, inglés ni ningún otro idioma ni caracteres no latinos (salvo emojis).'
+};
+const CJK_RE = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uff00-\uffef]/;
+const CJK_RE_G = new RegExp(CJK_RE.source, 'g');
+function removeCJK(text = '') {
+  return text.replace(CJK_RE_G, '').replace(/[ \t]{2,}/g, ' ');
+}
+
 const __file = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE_PATH = path.join(__file, 'profile.json');
 const VOICE_PATH   = path.join(__file, 'voice.json');
@@ -43,8 +70,9 @@ async function analyzeVoice(examples) {
   const response = await axios.post(
     'https://api.groq.com/openai/v1/chat/completions',
     {
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-      messages: [{
+      model: GROQ_VISION_MODEL,
+      ...groqReasoningOpts(),
+      messages: [SPANISH_ONLY, {
         role: 'user',
         content: `Analiza estos ${examples.length} pares de captions de Instagram (versión IA vs versión editada por el usuario) e identifica los patrones de estilo y preferencias del usuario.
 
@@ -57,7 +85,7 @@ Responde SOLO con una lista numerada de 4-5 patrones concisos y específicos en 
     { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
   );
 
-  return response.data.choices[0].message.content.trim();
+  return removeCJK(stripThinking(response.data.choices[0].message.content));
 }
 
 function profileContext(p) {
@@ -115,27 +143,38 @@ app.use(cors());
 app.use(express.json());
 
 // ─── API: Generar caption con Groq Vision ────────────────────────────────────
-app.post('/api/generate', upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No se recibio imagen' });
+// Acepta una imagen ('image', compatibilidad) o varias ('images', carrusel).
+const uploadImages = upload.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]);
+// Groq admite como máximo 3 imágenes por petición: la IA ve las 3 primeras.
+const MAX_VISION_IMAGES = 3;
 
-    const base64 = req.file.buffer.toString('base64');
-    const mimeType = req.file.mimetype;
+app.post('/api/generate', uploadImages, async (req, res) => {
+  try {
+    const files = [...(req.files?.images || []), ...(req.files?.image || [])].slice(0, 10);
+    if (!files.length) return res.status(400).json({ error: 'No se recibio imagen' });
+
+    const isCarousel = files.length > 1;
+    const seen = files.slice(0, MAX_VISION_IMAGES);
+    const imageParts = seen.map(f => ({
+      type: 'image_url',
+      image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` }
+    }));
+    const carouselNote = isCarousel
+      ? `Es un CARRUSEL de ${files.length} fotos (se te muestran ${seen.length === files.length ? 'todas' : `las ${seen.length} primeras`}, en orden). Escribe un caption que funcione para la serie completa, no para una sola foto, e invita a deslizar para ver el resto.\n\n`
+      : '';
 
     const payload = {
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-      messages: [{
+      model: GROQ_VISION_MODEL,
+      ...groqReasoningOpts(),
+      messages: [SPANISH_ONLY, {
         role: 'user',
         content: [
-          {
-            type: 'image_url',
-            image_url: { url: `data:${mimeType};base64,${base64}` }
-          },
+          ...imageParts,
           {
             type: 'text',
             text: `Eres community manager experto en Instagram para pymes hispanohablantes.
 
-${profileContext(loadProfile())}${voiceContext()}Analiza la imagen y genera EXACTAMENTE 3 captions distintos listos para publicar en Instagram, en español. Cada uno debe tener un tono diferente: el primero inspiracional, el segundo cercano/conversacional, el tercero directo/comercial.
+${profileContext(loadProfile())}${voiceContext()}${carouselNote}Analiza la imagen y genera EXACTAMENTE 3 captions distintos listos para publicar en Instagram, en español. Cada uno debe tener un tono diferente: el primero inspiracional, el segundo cercano/conversacional, el tercero directo/comercial.
 
 Formato OBLIGATORIO — respeta los separadores exactos:
 
@@ -156,16 +195,25 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
           }
         ]
       }],
-      max_tokens: 1024
+      max_tokens: 1024,
+      temperature: 0.6
     };
 
-    const response = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      payload,
-      { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
-    );
+    const callGroq = async () => {
+      const response = await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        payload,
+        { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
+      );
+      return stripThinking(response.data.choices[0].message.content).replace(/\\#/g, '#');
+    };
 
-    const raw = response.data.choices[0].message.content.replace(/\\#/g, '#');
+    let raw = await callGroq();
+    if (CJK_RE.test(raw)) {
+      console.warn('Caption con caracteres no latinos; reintentando una vez…');
+      raw = await callGroq();
+    }
+    raw = removeCJK(raw);
 
     // Parsear las 3 opciones
     const parts = raw.split(/===OPCION_\d+===/);
@@ -175,11 +223,13 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
 
     // Guardar en historial con imagen en base64
     const id = Date.now();
+    const imageFiles = files.map((f, i) => saveImage(i === 0 ? id : `${id}-${i + 1}`, f.buffer, f.mimetype));
     const entry = {
       id,
       date: new Date().toISOString(),
       caption: captionList[0],
-      imageFile: saveImage(id, req.file.buffer, mimeType),
+      imageFile: imageFiles[0],
+      ...(isCarousel ? { imageFiles } : {}),
       status: 'pending'
     };
     history.unshift(entry);
@@ -222,9 +272,10 @@ const MAX_SCHEDULE_MS = 365 * 24 * 60 * 60 * 1000; // 1 año
 // de una publicación programada.
 async function doPublish(entry, caption, imageBase64) {
   entry = entry || {};
-  const imagePublicUrl = entry.imageFile && ig.publicUrl()
-    ? `${ig.publicUrl()}/api/images/${entry.imageFile}`
-    : null;
+  const files = entry.imageFiles?.length ? entry.imageFiles : (entry.imageFile ? [entry.imageFile] : []);
+  const publicUrls = ig.publicUrl() ? files.map(f => `${ig.publicUrl()}/api/images/${f}`) : [];
+  const imagePublicUrl = publicUrls[0] || null;
+  const isCarousel = files.length > 1;
 
   // 1) Cuenta conectada por OAuth (Instagram Login) — modo principal.
   if (ig.isConnected()) {
@@ -237,11 +288,13 @@ async function doPublish(entry, caption, imageBase64) {
       };
     }
     try {
-      const { containerId, mediaId } = await ig.publishImage(imagePublicUrl, caption);
+      const { containerId, mediaId } = isCarousel
+        ? await ig.publishCarousel(publicUrls, caption)
+        : await ig.publishImage(imagePublicUrl, caption);
       entry.status = 'published';
       entry.publishedAt = new Date().toISOString();
       entry.igMediaId = mediaId;
-      return { success: true, containerId, mediaId, message: '¡Publicado en Instagram!' };
+      return { success: true, containerId, mediaId, message: isCarousel ? `¡Carrusel de ${files.length} fotos publicado en Instagram!` : '¡Publicado en Instagram!' };
     } catch (err) {
       entry.status = 'error';
       const detail = ig.graphError(err);
@@ -252,6 +305,10 @@ async function doPublish(entry, caption, imageBase64) {
 
   // 2) Token fijo en .env (META_ACCESS_TOKEN + META_INSTAGRAM_ACCOUNT_ID) — modo antiguo.
   if (process.env.META_ACCESS_TOKEN && process.env.META_INSTAGRAM_ACCOUNT_ID) {
+    if (isCarousel) {
+      entry.status = 'error';
+      return { success: false, error: 'Carrusel no disponible en este modo', detail: 'Conecta tu Instagram en Perfil de marca para publicar carruseles.' };
+    }
     try {
       const containerRes = await axios.post(
         `https://graph.facebook.com/v19.0/${process.env.META_INSTAGRAM_ACCOUNT_ID}/media`,
@@ -443,6 +500,7 @@ app.get('/api/history', (req, res) => {
     caption: h.caption,
     status: h.status,
     image: h.imageFile ? `/api/images/${h.imageFile}` : h.image,
+    images: (h.imageFiles || (h.imageFile ? [h.imageFile] : [])).map(f => `/api/images/${f}`),
     scheduledFor: h.scheduledFor || null,
     publishedAt: h.publishedAt || null,
     publishedLate: !!h.publishedLate,

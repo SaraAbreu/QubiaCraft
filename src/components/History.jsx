@@ -80,6 +80,7 @@ export default function History() {
                 <img src={item.image} alt="" className="history-thumb" />
                 <div className="history-item-info">
                   <span className={`badge ${s.cls}`}>{s.label}</span>
+                  {item.images?.length > 1 && <span className="badge badge-carousel">🖼 {item.images.length} fotos</span>}
                   <p className="history-date">
                     {item.publishedAt
                       ? `Publicado: ${formatDate(item.publishedAt)}`
@@ -101,6 +102,11 @@ export default function History() {
           <div className="history-detail card">
             <button className="detail-close" onClick={() => setSelected(null)}>✕</button>
             <img src={selected.image} alt="" className="detail-image" />
+            {selected.images?.length > 1 && (
+              <div className="detail-thumbs">
+                {selected.images.map((src, i) => <img key={src} src={src} alt={`Foto ${i + 1}`} />)}
+              </div>
+            )}
             <div className="detail-meta">
               <span className={`badge ${(STATUS_LABEL[selected.status] || {}).cls}`}>
                 {(STATUS_LABEL[selected.status] || {}).label}

@@ -4,7 +4,7 @@ export default {
   key: 'fotografia',
   label: 'Fotografía y estudio creativo',
   icon: '📷',
-  limites: ['No inventa precios ni fechas libres', 'Acredita a modelos y colaboradores', 'Sin retoques ni resultados prometidos'],
+  limites: ['No inventa precios ni fechas libres', 'Acredita a modelos y colaboradores', 'No promete cambios físicos gracias al retoque'],
   matches: ['Fotografía / Estudio creativo'],
   promptGuidance:
     'Habla de la mirada y del proceso detrás de la imagen: luz, intención, la historia o la marca que se cuenta. ' +

@@ -6,3 +6,7 @@ server/voice.json
 
 server/data/
 .env.bak*
+
+# Imágenes sueltas de referencia (no se suben)
+/*.jpeg
+/*.jfif
