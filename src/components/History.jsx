@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './History.css';
+import PostActions from './PostActions.jsx';
 
 const STATUS_LABEL = {
   pending: { label: 'Pendiente', cls: 'badge-pending' },
@@ -15,24 +16,14 @@ export default function History() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
-  const [cancelling, setCancelling] = useState(false);
+  function updateItem(updated) {
+    setItems(list => list.map(i => (i.id === updated.id ? updated : i)));
+    setSelected(updated);
+  }
 
-  async function cancelSchedule(item) {
-    setCancelling(true);
-    try {
-      const res = await fetch('/api/unschedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: item.id })
-      });
-      if (res.ok) {
-        const updated = { ...item, status: 'pending', scheduledFor: null };
-        setItems(list => list.map(i => (i.id === item.id ? updated : i)));
-        setSelected(updated);
-      }
-    } finally {
-      setCancelling(false);
-    }
+  function removeItem(id) {
+    setItems(list => list.filter(i => i.id !== id));
+    setSelected(null);
   }
 
   useEffect(() => {
@@ -116,9 +107,6 @@ export default function History() {
             {selected.status === 'scheduled' && selected.scheduledFor && (
               <div className="detail-schedule">
                 <span>🗓️ Se publicará el <strong>{formatDate(selected.scheduledFor)}</strong></span>
-                <button className="btn btn-ghost" disabled={cancelling} onClick={() => cancelSchedule(selected)}>
-                  {cancelling ? 'Cancelando…' : 'Cancelar programación'}
-                </button>
               </div>
             )}
             {selected.publishedAt && (
@@ -130,10 +118,7 @@ export default function History() {
             {selected.status === 'error' && selected.errorDetail && (
               <p className="detail-note detail-error">⚠️ {selected.errorDetail}</p>
             )}
-            <div className="detail-caption">
-              <div className="detail-caption-label">Caption</div>
-              <pre className="detail-caption-text">{selected.caption}</pre>
-            </div>
+            <PostActions item={selected} onChanged={updateItem} onDeleted={removeItem} />
           </div>
         )}
       </div>

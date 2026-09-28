@@ -63,3 +63,17 @@ export function imageDataUrl(file) {
   if (!p) return null;
   return `data:${imageMime(file)};base64,${fs.readFileSync(p).toString('base64')}`;
 }
+
+// Borra una entrada del historial y sus imágenes. Devuelve true si existía.
+export function deleteEntry(id) {
+  const idx = history.findIndex(h => String(h.id) === String(id));
+  if (idx === -1) return false;
+  const [entry] = history.splice(idx, 1);
+  const files = entry.imageFiles?.length ? entry.imageFiles : (entry.imageFile ? [entry.imageFile] : []);
+  files.forEach(f => {
+    const p = imagePath(f);
+    if (p) { try { fs.unlinkSync(p); } catch { /* ya no existe */ } }
+  });
+  saveHistory();
+  return true;
+}

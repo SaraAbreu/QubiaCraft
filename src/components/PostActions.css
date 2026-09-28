@@ -1,0 +1,32 @@
+.post-actions { display: flex; flex-direction: column; gap: 14px; }
+.pa-field { display: flex; flex-direction: column; gap: 6px; }
+.pa-label { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.pa-count { font-weight: 500; text-transform: none; }
+.pa-count.over { color: var(--danger); }
+.pa-textarea, .pa-input {
+  width: 100%; background: var(--bg2); color: inherit; border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; font: inherit; font-size: 13px; line-height: 1.5;
+}
+.pa-textarea { resize: vertical; min-height: 140px; }
+.pa-textarea:focus, .pa-input:focus { outline: none; border-color: var(--accent); }
+.pa-input { color-scheme: dark; }
+.pa-when { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pa-when .pa-input { flex: 1; min-width: 180px; }
+.pa-readonly { white-space: pre-wrap; font: inherit; font-size: 13px; line-height: 1.5; margin: 0; color: var(--text2); }
+.pa-buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pa-buttons .btn-primary { flex: 1; justify-content: center; }
+.pa-small { padding: 6px 10px; font-size: 12px; }
+.pa-delete:hover:not(:disabled) { border-color: var(--danger) !important; color: var(--danger) !important; }
+.pa-confirm { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--text2); width: 100%; }
+.pa-msg { font-size: 12px; padding: 8px 10px; border-radius: 8px; }
+.pa-error { background: rgba(239,68,68,.12); color: #fca5a5; }
+.pa-ok { background: rgba(23,195,198,.12); color: var(--accent2); }
+
+/* Modal (Estudio) */
+.pa-overlay { position: fixed; inset: 0; background: rgba(5,10,20,.7); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
+.pa-modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; padding: 18px; position: relative; }
+.pa-modal-head { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; padding-right: 30px; }
+.pa-modal-head img { width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
+.pa-modal-close { position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; border-radius: 50%; background: var(--bg3); color: #fff; }
+.upcoming-item.clickable { cursor: pointer; }
+.upcoming-item.clickable:hover { background: var(--bg3); }

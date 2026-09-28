@@ -9,7 +9,7 @@ import 'dotenv/config';
 
 import { VERTICALS, resolveVertical } from './modules/index.js';
 import { buildImagePrompt, generateImage } from './services/imageGen.js';
-import { history, saveHistory, findEntry, saveImage, imagePath, imageMime, imageDataUrl } from './services/store.js';
+import { history, saveHistory, findEntry, deleteEntry, saveImage, imagePath, imageMime, imageDataUrl } from './services/store.js';
 import { startScheduler } from './services/scheduler.js';
 import * as ig from './services/instagram.js';
 
@@ -493,8 +493,8 @@ app.get('/api/voice', (req, res) => {
 });
 
 // ─── API: Historial ──────────────────────────────────────────────────────────
-app.get('/api/history', (req, res) => {
-  res.json(history.map(h => ({
+function publicItem(h) {
+  return {
     id: h.id,
     date: h.date,
     caption: h.caption,
@@ -505,7 +505,81 @@ app.get('/api/history', (req, res) => {
     publishedAt: h.publishedAt || null,
     publishedLate: !!h.publishedLate,
     errorDetail: h.errorDetail || null
-  })));
+  };
+}
+
+app.get('/api/history', (req, res) => {
+  res.json(history.map(publicItem));
+});
+
+// ─── API: Gestionar una publicación (editar, publicar ya, borrar) ────────────
+// Se pueden tocar las que aún no se han publicado.
+const EDITABLE = ['pending', 'scheduled', 'error', 'rejected'];
+
+// Editar caption y/o fecha. scheduledFor: ISO → programar/reprogramar;
+// null → quitar la programación (queda pendiente).
+app.patch('/api/posts/:id', (req, res) => {
+  const entry = findEntry(req.params.id);
+  if (!entry) return res.status(404).json({ error: 'No se encontró la publicación' });
+  if (!EDITABLE.includes(entry.status)) {
+    return res.status(409).json({ error: 'Esta publicación ya no se puede modificar' });
+  }
+  const { caption, scheduledFor } = req.body || {};
+
+  if (caption !== undefined) {
+    if (!String(caption).trim()) return res.status(400).json({ error: 'El caption no puede estar vacío' });
+    if (String(caption).length > 2200) return res.status(400).json({ error: 'Instagram admite como máximo 2200 caracteres' });
+    entry.caption = String(caption);
+  }
+
+  if (scheduledFor !== undefined) {
+    if (scheduledFor === null || scheduledFor === '') {
+      delete entry.scheduledFor;
+      entry.status = 'pending';
+    } else {
+      const d = new Date(scheduledFor);
+      const delay = d.getTime() - Date.now();
+      if (isNaN(delay)) return res.status(400).json({ error: 'Fecha no válida' });
+      if (delay <= 60000) return res.status(400).json({ error: 'Elige una hora al menos 1 minuto en el futuro' });
+      if (delay > MAX_SCHEDULE_MS) return res.status(400).json({ error: 'Solo se puede programar hasta 1 año vista' });
+      entry.scheduledFor = d.toISOString();
+      entry.status = 'scheduled';
+    }
+  } else if (entry.status === 'error' || entry.status === 'rejected') {
+    entry.status = 'pending'; // tras corregirla vuelve a estar lista
+  }
+  delete entry.errorDetail;
+  delete entry.publishedLate;
+  saveHistory();
+  res.json({ success: true, item: publicItem(entry) });
+});
+
+// Publicar ya (también sirve para adelantar una programada o reintentar un error).
+app.post('/api/posts/:id/publish', async (req, res) => {
+  const entry = findEntry(req.params.id);
+  if (!entry) return res.status(404).json({ error: 'No se encontró la publicación' });
+  if (!EDITABLE.includes(entry.status)) {
+    return res.status(409).json({ error: 'Esta publicación ya se publicó o se está publicando' });
+  }
+  delete entry.scheduledFor;
+  delete entry.errorDetail;
+  entry.status = 'publishing';
+  saveHistory();
+  const result = await doPublish(entry, entry.caption, entry.imageFile ? imageDataUrl(entry.imageFile) : entry.image);
+  if (!result.success) entry.errorDetail = result.detail;
+  saveHistory();
+  res.status(result.success ? 200 : 500).json({ ...result, item: publicItem(entry) });
+});
+
+// Borrar de Qubia Craft (no borra nada que ya esté en Instagram).
+app.delete('/api/posts/:id', (req, res) => {
+  const entry = findEntry(req.params.id);
+  if (!entry) return res.status(404).json({ error: 'No se encontró la publicación' });
+  if (entry.status === 'publishing') {
+    return res.status(409).json({ error: 'Se está publicando ahora mismo; espera a que termine' });
+  }
+  deleteEntry(entry.id);
+  res.json({ success: true });
 });
 
 // ─── Servir frontend en produccion ───────────────────────────────────────────

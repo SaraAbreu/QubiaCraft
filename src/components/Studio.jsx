@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import './Studio.css';
 import './InstagramConnect.css';
+import PostActions from './PostActions.jsx';
 
 const TONOS = [
   { label: 'Inspiracional', icon: '✨' },
@@ -101,6 +102,9 @@ export default function Studio({ onOpenSettings }) {
   const [publishing, setPublishing] = useState(false);
   const [pubError, setPubError] = useState('');
   const [result, setResult] = useState(null);
+
+  // Publicación abierta desde "Próximas publicaciones"
+  const [openPost, setOpenPost] = useState(null);
 
   useEffect(() => {
     fetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => setProfile({}));
@@ -684,7 +688,12 @@ export default function Studio({ onOpenSettings }) {
                   const meta = statusMeta(item.status);
                   const dateRef = item.scheduledFor || item.date;
                   return (
-                    <div key={item.id} className="upcoming-item">
+                    <div
+                      key={item.id}
+                      className="upcoming-item clickable"
+                      onClick={() => setOpenPost(item)}
+                      title="Ver, editar, publicar o borrar"
+                    >
                       <img src={item.image} alt="" className="upcoming-thumb" />
                       <div className="upcoming-info">
                         <span className={`status-dot ${meta.cls}`}>{meta.label}</span>
@@ -698,6 +707,31 @@ export default function Studio({ onOpenSettings }) {
           </div>
         </section>
       </div>
+
+      {openPost && (
+        <div className="pa-overlay" onClick={() => setOpenPost(null)}>
+          <div className="pa-modal" onClick={e => e.stopPropagation()}>
+            <button className="pa-modal-close" onClick={() => setOpenPost(null)} title="Cerrar">✕</button>
+            <div className="pa-modal-head">
+              <img src={openPost.image} alt="" />
+              <div>
+                <span className={`status-dot ${statusMeta(openPost.status).cls}`}>{statusMeta(openPost.status).label}</span>
+                {openPost.images?.length > 1 && <p className="upcoming-date">Carrusel · {openPost.images.length} fotos</p>}
+                {openPost.errorDetail && <p className="upcoming-date">⚠️ {openPost.errorDetail}</p>}
+              </div>
+            </div>
+            <PostActions
+              item={openPost}
+              onChanged={updated => { setOpenPost(updated); refreshHistory(); }}
+              onDeleted={id => {
+                setOpenPost(null);
+                if (id === jobId) resetAll();
+                refreshHistory();
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
