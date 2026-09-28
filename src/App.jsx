@@ -4,13 +4,18 @@ import Studio from './components/Studio.jsx';
 import History from './components/History.jsx';
 import Settings from './components/Settings.jsx';
 import Login from './components/Login.jsx';
+import Landing from './components/Landing.jsx';
 import './App.css';
 import './components/Login.css';
+import './components/Landing.css';
 
 export default function App() {
   // undefined = comprobando sesión · null = sin sesión · objeto = usuario
   const [user, setUser] = useState(undefined);
   const [migrated, setMigrated] = useState(null);
+  // Sin sesión: landing de presentación, o pantalla de acceso ('login' | 'register')
+  const [authMode, setAuthMode] = useState(null);
+  const [signupOpen, setSignupOpen] = useState(true);
 
   // Vuelta del OAuth de Instagram: ?instagram=connected|error&msg=…
   const [igFlash] = useState(() => {
@@ -24,6 +29,7 @@ export default function App() {
   const [historyKey, setHistoryKey] = useState(0);
 
   useEffect(() => {
+    fetch('/api/auth/config').then(r => r.json()).then(c => setSignupOpen(c.signupOpen !== false)).catch(() => {});
     fetch('/api/auth/me')
       .then(r => r.json())
       .then(d => setUser(d.user || null))
@@ -50,11 +56,17 @@ export default function App() {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     setUser(null);
     setMigrated(null);
+    setAuthMode(null);
     setScreen('studio');
   }
 
   if (user === undefined) return <div className="app-loading">Cargando…</div>;
-  if (!user) return <Login onLogin={handleLogin} />;
+  if (!user) {
+    if (!authMode) {
+      return <Landing signupOpen={signupOpen} onAuth={mode => { setAuthMode(mode); window.scrollTo(0, 0); }} />;
+    }
+    return <Login key={authMode} initialMode={authMode} onLogin={handleLogin} onBack={() => setAuthMode(null)} />;
+  }
 
   return (
     <div className="app-shell">

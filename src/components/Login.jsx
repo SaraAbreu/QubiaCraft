@@ -3,8 +3,8 @@ import './Login.css';
 
 // Pantalla de acceso: entrar o crear cuenta. Cada cuenta tiene su propio
 // perfil de marca, historial y conexión de Instagram.
-export default function Login({ onLogin }) {
-  const [mode, setMode] = useState('login'); // login | register
+export default function Login({ onLogin, onBack, initialMode = 'login' }) {
+  const [mode, setMode] = useState(initialMode); // login | register
   const [config, setConfig] = useState({ signupOpen: true, inviteRequired: false });
   const [form, setForm] = useState({ name: '', email: '', password: '', invite: '' });
   const [busy, setBusy] = useState(false);
@@ -26,10 +26,10 @@ export default function Login({ onLogin }) {
     setBusy(true);
     setError('');
     try {
-      const res = await fetch(`/api/auth/${mode}`, {
+      const res = await fetch(`/api/auth/${isRegister ? 'register' : 'login'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mode === 'login'
+        body: JSON.stringify(!isRegister
           ? { email: form.email, password: form.password }
           : form),
       });
@@ -43,10 +43,11 @@ export default function Login({ onLogin }) {
     }
   }
 
-  const isRegister = mode === 'register';
+  const isRegister = mode === 'register' && config.signupOpen;
 
   return (
     <div className="login-page">
+      {onBack && <button className="lp-auth-back" onClick={onBack} type="button">← Volver</button>}
       <div className="login-card">
         <div className="login-brand">
           <img src="/logo-mark.png" alt="" className="login-logo" />
