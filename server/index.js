@@ -114,6 +114,9 @@ function voiceContext(voice) {
 }
 
 const app = express();
+// Detrás del proxy de Railway / Render: IP real del visitante (límite de
+// intentos de login) y HTTPS correcto.
+app.set('trust proxy', 1);
 
 // Express 4 no captura errores de handlers async: los envolvemos para que un
 // fallo (p. ej. de la base de datos) llegue al manejador de errores en vez
