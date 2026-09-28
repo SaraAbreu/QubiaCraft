@@ -470,3 +470,37 @@
 .ig-dots { display: flex; justify-content: center; gap: 4px; padding-top: 8px; }
 .ig-dots span { width: 6px; height: 6px; border-radius: 50%; background: #555; }
 .ig-dots span.on { background: var(--accent2); }
+
+/* ── Encuadre (proporción, recortar / foto entera) ── */
+.crop-frame {
+  position: relative; overflow: hidden; display: block; margin: 0 auto;
+  background: #000; border-radius: var(--radius-sm); touch-action: none; user-select: none;
+}
+.crop-frame.draggable { cursor: grab; }
+.crop-frame.dragging { cursor: grabbing; }
+.crop-img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; }
+.crop-bg {
+  position: absolute; inset: -12%; width: 124%; height: 124%; object-fit: cover;
+  filter: blur(22px) brightness(0.8); pointer-events: none;
+}
+.crop-grid {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.33% - 0.5px), rgba(255,255,255,.45) calc(33.33% - 0.5px), rgba(255,255,255,.45) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px), transparent calc(66.66% - 0.5px), rgba(255,255,255,.45) calc(66.66% - 0.5px), rgba(255,255,255,.45) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(33.33% - 0.5px), rgba(255,255,255,.45) calc(33.33% - 0.5px), rgba(255,255,255,.45) calc(33.33% + 0.5px), transparent calc(33.33% + 0.5px), transparent calc(66.66% - 0.5px), rgba(255,255,255,.45) calc(66.66% - 0.5px), rgba(255,255,255,.45) calc(66.66% + 0.5px), transparent calc(66.66% + 0.5px));
+}
+.ig-media .crop-frame { border-radius: 0; }
+
+.frame-controls { display: flex; flex-direction: column; gap: 8px; }
+.frame-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.frame-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; margin-right: 2px; }
+.frame-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
+  background: var(--bg); color: var(--text2); border: 1px solid var(--border);
+}
+.frame-chip:hover { border-color: var(--accent); color: var(--text); }
+.frame-chip.active { background: rgba(198,151,88,.15); border-color: var(--accent); color: var(--accent); }
+.ratio-icon { display: inline-block; height: 12px; border: 1.5px solid currentColor; border-radius: 2px; }
+.frame-fit { width: 100%; }
+.frame-hint { font-size: 11px; color: var(--text2); margin: 0; }

@@ -642,6 +642,24 @@ app.post('/api/posts/:id/publish', async (req, res) => {
   res.status(result.success ? 200 : 500).json({ ...result, item: publicItem(updated) });
 });
 
+// Sustituir las fotos (p. ej. cambiaste el encuadre después de generar).
+app.post('/api/posts/:id/images', uploadImages, async (req, res) => {
+  const uid = req.user.id;
+  const post = await repo.getPost(uid, req.params.id);
+  if (!post) return res.status(404).json({ error: 'No se encontró la publicación' });
+  if (!EDITABLE.includes(post.status)) {
+    return res.status(409).json({ error: 'Esta publicación ya no se puede modificar' });
+  }
+  const files = [...(req.files?.images || []), ...(req.files?.image || [])].slice(0, 10);
+  if (!files.length) return res.status(400).json({ error: 'No se recibió ninguna imagen' });
+  if (files.some(f => !f.mimetype?.startsWith('image/'))) return res.status(400).json({ error: 'Solo se admiten imágenes' });
+
+  const imageFiles = files.map(f => saveImage(uid, f.buffer, f.mimetype));
+  const updated = await repo.updatePost(uid, post.id, { imageFiles });
+  deleteImages(post.imageFiles.filter(f => !imageFiles.includes(f)));
+  res.json({ success: true, item: publicItem(updated) });
+});
+
 // Borrar de Qubia Craft (no borra nada que ya esté en Instagram).
 app.delete('/api/posts/:id', async (req, res) => {
   const uid = req.user.id;

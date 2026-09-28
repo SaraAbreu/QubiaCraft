@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import './Studio.css';
 import './InstagramConnect.css';
 import PostActions from './PostActions.jsx';
+import CropFrame from './CropFrame.jsx';
+import { RATIOS, BACKGROUNDS, DEFAULT_FRAME, resolveRatio, ratioLabel, renderFramed, loadImage } from '../lib/framing.js';
 
 const TONOS = [
   { label: 'Inspiracional', icon: '✨' },
@@ -31,28 +33,6 @@ function formatFull(iso) {
   return new Date(iso).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-// Compresión de imagen en el cliente antes de enviarla a la IA
-async function compressImage(f, maxPx = 1200, quality = 0.85) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    const url = URL.createObjectURL(f);
-    img.onload = () => {
-      let { width, height } = img;
-      if (width > maxPx || height > maxPx) {
-        if (width > height) { height = Math.round(height * maxPx / width); width = maxPx; }
-        else { width = Math.round(width * maxPx / height); height = maxPx; }
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-      URL.revokeObjectURL(url);
-      canvas.toBlob(blob => resolve(new File([blob], f.name, { type: 'image/jpeg' })), 'image/jpeg', quality);
-    };
-    img.src = url;
-  });
-}
-
 const MAX_IMAGES = 10;
 
 function next7Days() {
@@ -80,6 +60,18 @@ export default function Studio({ onOpenSettings }) {
   const file = items[0]?.file || null;
   const preview = items[Math.min(activeIdx, items.length - 1)]?.url || null;
   const isCarousel = items.length > 1;
+
+  // Encuadre (igual para todas las fotos del carrusel, como en Instagram) y
+  // el encuadre con el que se generó el contenido, para saber si cambió.
+  const [frame, setFrame] = useState(DEFAULT_FRAME);
+  const [generatedFrameKey, setGeneratedFrameKey] = useState(null);
+  const ratioInfo = resolveRatio(frame.ratio, items[0]);
+  const frameKey = JSON.stringify({ ...frame, r: ratioInfo.value, f: items.map(it => it.focus) });
+  const activeItem = items[Math.min(activeIdx, items.length - 1)] || null;
+
+  function setItemFocus(i, focus) {
+    setItems(prev => prev.map((it, j) => (j === i ? { ...it, focus } : it)));
+  }
   const [dragging, setDragging] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState('');
@@ -185,9 +177,26 @@ export default function Studio({ onOpenSettings }) {
       : ''
     );
     if (!accepted.length) return;
-    setItems(prev => [...prev, ...accepted.map(f => ({ file: f, url: URL.createObjectURL(f) }))]);
+    const added = accepted.map(f => ({ file: f, url: URL.createObjectURL(f), focus: { x: 0.5, y: 0.5 } }));
+    setItems(prev => [...prev, ...added]);
     setAiMode(false);
     invalidateContent();
+    // Tamaño real de cada foto (para "Original" y para arrastrar el encuadre).
+    added.forEach(it => {
+      loadImage(it.url)
+        .then(img => setItems(prev => prev.map(p => (p.url === it.url ? { ...p, w: img.naturalWidth, h: img.naturalHeight } : p))))
+        .catch(() => {});
+    });
+  }
+
+  // Las fotos tal y como se publicarán (proporción + encuadre), en JPEG.
+  async function framedFiles() {
+    const out = [];
+    for (const it of items) {
+      const blob = await renderFramed(it.url, { ...frame, ratio: ratioInfo.value, focus: it.focus });
+      out.push(new File([blob], 'foto.jpg', { type: 'image/jpeg' }));
+    }
+    return out;
   }
 
   // Compatibilidad: la imagen generada con IA entra por aquí.
@@ -224,6 +233,8 @@ export default function Studio({ onOpenSettings }) {
     items.forEach(it => URL.revokeObjectURL(it.url));
     setItems([]);
     setActiveIdx(0);
+    setFrame(DEFAULT_FRAME);
+    setGeneratedFrameKey(null);
     setCaptions([]);
     setJobId(null);
     setCaption('');
@@ -275,13 +286,15 @@ export default function Studio({ onOpenSettings }) {
     setGenError('');
     try {
       const form = new FormData();
-      for (const it of items) form.append('images', await compressImage(it.file));
+      for (const f of await framedFiles()) form.append('images', f);
+      const keyAtGeneration = frameKey;
       const res = await fetch('/api/generate', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error generando caption');
       const list = data.captions ?? [data.caption];
       setCaptions(list);
       setJobId(data.id);
+      setGeneratedFrameKey(keyAtGeneration);
       setSelected(0);
       setCaption(list[0]);
       setOriginalCaption(list[0]);
@@ -315,7 +328,16 @@ export default function Studio({ onOpenSettings }) {
     setPublishing(true);
     setPubError('');
     try {
-      const body = { id: jobId, caption, originalCaption, imageBase64: items[0]?.url };
+      // Si cambiaste el encuadre después de generar, se suben las fotos nuevas.
+      if (generatedFrameKey !== frameKey) {
+        const form = new FormData();
+        for (const f of await framedFiles()) form.append('images', f);
+        const up = await fetch(`/api/posts/${jobId}/images`, { method: 'POST', body: form });
+        const upData = await up.json().catch(() => ({}));
+        if (!up.ok) throw new Error(upData.error || 'No se pudo actualizar el encuadre');
+        setGeneratedFrameKey(frameKey);
+      }
+      const body = { id: jobId, caption, originalCaption };
       if (mode === 'schedule') {
         if (!scheduledFor) { setPubError('Elige una fecha y hora para programar'); setPublishing(false); return; }
         body.scheduledFor = new Date(scheduledFor).toISOString();
@@ -456,7 +478,17 @@ export default function Studio({ onOpenSettings }) {
             ) : (
               <div className="preview-block">
                 <div className="preview-image-wrap">
-                  <img src={preview} alt="Preview" className="preview-image" />
+                  <CropFrame
+                    src={preview}
+                    natural={activeItem}
+                    ratio={ratioInfo.value}
+                    fit={frame.fit}
+                    bg={frame.bg}
+                    focus={activeItem?.focus}
+                    onFocus={f => setItemFocus(activeIdx, f)}
+                    maxHeight={320}
+                    className="preview-frame"
+                  />
                   {isCarousel && <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>}
                   <button className="preview-remove" onClick={resetAll} title="Quitar todas">✕</button>
                 </div>
@@ -487,7 +519,43 @@ export default function Studio({ onOpenSettings }) {
                     onChange={e => { addFiles(e.target.files); e.target.value = ''; }}
                   />
                 </div>
-                {isCarousel && <p className="carousel-hint">Carrusel de {items.length} fotos · la IA analiza las 3 primeras. Instagram recorta todas a la proporción de la primera.</p>}
+                <div className="frame-controls">
+                  <div className="frame-row">
+                    {RATIOS.map(r => (
+                      <button
+                        key={r.key}
+                        className={`frame-chip ${frame.ratio === r.key ? 'active' : ''}`}
+                        onClick={() => setFrame(fr => ({ ...fr, ratio: r.key }))}
+                        title={r.hint || 'Proporción de la foto'}
+                      >
+                        {r.value && <span className="ratio-icon" style={{ aspectRatio: String(r.value) }} />}
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="frame-row">
+                    <div className="mode-toggle frame-fit">
+                      <button className={`mode-btn ${frame.fit === 'cover' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'cover' }))}>✂️ Recortar</button>
+                      <button className={`mode-btn ${frame.fit === 'contain' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'contain' }))}>🖼️ Foto entera</button>
+                    </div>
+                  </div>
+                  {frame.fit === 'contain' && (
+                    <div className="frame-row">
+                      <span className="frame-label">Fondo</span>
+                      {BACKGROUNDS.map(b => (
+                        <button key={b.key} className={`frame-chip ${frame.bg === b.key ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, bg: b.key }))}>{b.label}</button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="frame-hint">
+                    {frame.fit === 'cover' ? 'Arrastra la foto para encuadrarla. ' : 'Se ve la foto completa, con bordes. '}
+                    {frame.ratio === 'original' && ratioInfo.adjusted
+                      ? `Instagram solo admite de 4:5 a 1.91:1: se ajusta a ${ratioLabel(ratioInfo.value)}.`
+                      : `Proporción ${ratioLabel(ratioInfo.value)}.`}
+                  </p>
+                </div>
+
+                {isCarousel && <p className="carousel-hint">Carrusel de {items.length} fotos · la IA analiza las 3 primeras. Todas usan la misma proporción; el encuadre es de cada foto.</p>}
                 <button className="btn btn-primary generate-btn" onClick={generate} disabled={generating}>
                   {generating ? <><span className="spinner" /> Generando…</> : captions.length ? '🔄 Regenerar contenido' : '✨ Generar contenido'}
                 </button>
@@ -538,7 +606,15 @@ export default function Studio({ onOpenSettings }) {
                     <span className="ig-more">•••</span>
                   </div>
                   <div className="ig-media">
-                    <img src={preview} alt="Post" className="ig-image" />
+                    <CropFrame
+                      src={preview}
+                      natural={activeItem}
+                      ratio={ratioInfo.value}
+                      fit={frame.fit}
+                      bg={frame.bg}
+                      focus={activeItem?.focus}
+                      className="ig-image"
+                    />
                     {isCarousel && (
                       <>
                         <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>
