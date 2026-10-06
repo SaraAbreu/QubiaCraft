@@ -1,6 +1,8 @@
 {
   "name": "qubia-craft",
   "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
   "description": "Qubia Craft — Generador de publicaciones para Instagram con IA, adaptable a cualquier negocio",
   "type": "module",
   "scripts": {
