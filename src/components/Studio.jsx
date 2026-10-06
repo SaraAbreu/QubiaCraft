@@ -46,7 +46,13 @@ function next7Days() {
   return days;
 }
 
-export default function Studio({ onOpenSettings }) {
+// ISO → valor para <input type="datetime-local"> en la hora local del navegador
+const toLocalInput = iso => {
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+
+export default function Studio({ onOpenSettings, initialSlot }) {
   const [profile, setProfile] = useState(null);
   const [verticals, setVerticals] = useState([]);
   const [igStatus, setIgStatus] = useState(null);
@@ -89,8 +95,9 @@ export default function Studio({ onOpenSettings }) {
   const [copied, setCopied] = useState(false);
 
   // Panel 3 — publicación
-  const [mode, setMode] = useState('now'); // now | schedule
-  const [scheduledFor, setScheduledFor] = useState('');
+  const [mode, setMode] = useState(initialSlot ? 'schedule' : 'now'); // now | schedule
+  const [suggested, setSuggested] = useState([]); // huecos recomendados (pantalla Estrategia)
+  const [scheduledFor, setScheduledFor] = useState(initialSlot ? toLocalInput(initialSlot) : '');
   const [publishing, setPublishing] = useState(false);
   const [pubError, setPubError] = useState('');
   const [result, setResult] = useState(null);
@@ -376,6 +383,11 @@ export default function Studio({ onOpenSettings }) {
   const igLocation = profile?.ciudad || 'España';
   const charCount = caption.length;
   const charLimit = 2200;
+  useEffect(() => {
+    if (mode !== 'schedule' || suggested.length) return;
+    fetch('/api/strategy').then(r => (r.ok ? r.json() : null)).then(d => d && setSuggested(d.nextSlots || [])).catch(() => {});
+  }, [mode]);
+
   const minDateTime = new Date(Date.now() + 5 * 60000).toISOString().slice(0, 16);
 
   return (
@@ -734,6 +746,20 @@ export default function Studio({ onOpenSettings }) {
                     value={scheduledFor}
                     onChange={e => setScheduledFor(e.target.value)}
                   />
+                )}
+
+                {mode === 'schedule' && suggested.length > 0 && (
+                  <div className="slot-suggest">
+                    <span>Buenos momentos para tu sector:</span>
+                    {suggested.map(sl => {
+                      const v = toLocalInput(sl.iso);
+                      return (
+                        <button key={sl.iso} type="button" className={`slot-chip ${scheduledFor === v ? 'active' : ''}`} onClick={() => setScheduledFor(v)}>
+                          {new Date(sl.iso).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
 
                 {pubError && <div className="inline-error">⚠️ {pubError}</div>}

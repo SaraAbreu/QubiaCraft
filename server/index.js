@@ -8,6 +8,8 @@ import { fileURLToPath } from 'url';
 import 'dotenv/config';
 
 import { VERTICALS, resolveVertical } from './modules/index.js';
+import { strategyFor } from './modules/strategy.js';
+import { upcomingKeyDates } from './services/keyDates.js';
 import { buildImagePrompt, generateImage } from './services/imageGen.js';
 import { saveImage, imagePath, imageMime, deleteImages } from './services/store.js';
 import * as repo from './services/repo.js';
@@ -491,6 +493,82 @@ app.get('/api/verticals', (req, res) => {
     ejemplos: v.ejemplos || {},
     extraProfileFields: v.extraProfileFields,
   })));
+});
+
+// ─── API: Estrategia (cuándo y qué publicar) ─────────────────────────────────
+// Pautas del sector + fechas clave + ritmo propio. No usa estadísticas de
+// Instagram (requieren un permiso aparte): las horas son orientativas.
+const TZ = 'Atlantic/Canary';
+const WEEKDAYS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+
+function localParts(date) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short' });
+  const o = Object.fromEntries(f.formatToParts(date).map(x => [x.type, x.value]));
+  const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(o.weekday) + 1;
+  return { y: +o.year, m: +o.month, d: +o.day, h: +o.hour % 24, min: +o.minute, wd };
+}
+
+// Hora local de Canarias → instante UTC (tiene en cuenta el horario de verano)
+function zonedToUtc(y, m, d, h) {
+  const guess = Date.UTC(y, m - 1, d, h);
+  const p = localParts(new Date(guess));
+  const offset = Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - guess;
+  return new Date(guess - offset);
+}
+
+function nextSlots(strategy, posts, count = 3) {
+  const taken = posts.filter(p => p.status === 'scheduled' && p.scheduledFor).map(p => new Date(p.scheduledFor).getTime());
+  const now = Date.now(), out = [];
+  for (let i = 0; i < 21 && out.length < count; i++) {
+    const day = localParts(new Date(now + i * 86400000));
+    if (!strategy.days.includes(day.wd)) continue;
+    for (const h of strategy.hours) {
+      const at = zonedToUtc(day.y, day.m, day.d, h);
+      const t = at.getTime();
+      if (t < now + 30 * 60000) continue;
+      if (taken.some(x => Math.abs(x - t) < 12 * 3600000)) continue; // ese día ya hay algo
+      out.push({ iso: at.toISOString(), weekday: WEEKDAYS[day.wd - 1], hour: h });
+      break; // como mucho una propuesta por día
+    }
+  }
+  return out;
+}
+
+app.get('/api/strategy', async (req, res) => {
+  const uid = req.user.id;
+  const [profile, posts] = await Promise.all([repo.getProfile(uid), repo.listPosts(uid)]);
+  const vertical = resolveVertical(profile?.tipoNegocio);
+  const s = strategyFor(vertical.key);
+
+  const now = Date.now();
+  const published = posts.filter(p => p.status === 'published' && p.publishedAt);
+  const last30 = published.filter(p => now - new Date(p.publishedAt).getTime() < 30 * 86400000);
+  const byWeekday = Array(7).fill(0);
+  for (const p of published) byWeekday[localParts(new Date(p.publishedAt)).wd - 1]++;
+  const lastAt = published.map(p => p.publishedAt).sort().pop() || null;
+
+  res.json({
+    vertical: { key: vertical.key, label: vertical.label, icon: vertical.icon || '' },
+    hasProfile: !!profile?.tipoNegocio,
+    timezone: TZ,
+    bestDays: s.days.map(d => WEEKDAYS[d - 1]),
+    bestHours: s.hours,
+    why: s.why,
+    formats: s.formats,
+    publish: s.publish,
+    avoid: s.avoid,
+    nextSlots: nextSlots(s, posts),
+    keyDates: upcomingKeyDates(vertical.key),
+    activity: {
+      publishedLast30: last30.length,
+      perWeekLast30: Math.round((last30.length / 30) * 7 * 10) / 10,
+      scheduled: posts.filter(p => p.status === 'scheduled').length,
+      lastPublishedAt: lastAt,
+      daysSinceLast: lastAt ? Math.floor((now - new Date(lastAt).getTime()) / 86400000) : null,
+      byWeekday: WEEKDAYS.map((name, i) => ({ name, count: byWeekday[i] })),
+      targetPerWeek: 3,
+    },
+  });
 });
 
 // ─── API: Conexión con Instagram (OAuth, una cuenta por usuario) ─────────────

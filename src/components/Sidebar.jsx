@@ -10,6 +10,13 @@ const ICONS = {
       <rect x="3" y="16" width="7" height="5" rx="1.5" />
     </svg>
   ),
+  strategy: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="17" rx="2" />
+      <path d="M3 9h18M8 2v4M16 2v4" />
+      <path d="M8.5 14.5l2.2 2.2 4.8-4.8" />
+    </svg>
+  ),
   history: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="9" />
@@ -33,6 +40,7 @@ const ICONS = {
 
 const NAV_ITEMS = [
   { key: 'studio', label: 'Estudio', matches: ['studio'] },
+  { key: 'strategy', label: 'Estrategia', matches: ['strategy'] },
   { key: 'history', label: 'Historial', matches: ['history'] },
   { key: 'settings', label: 'Perfil de marca', matches: ['settings'] },
 ];

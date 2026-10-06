@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar.jsx';
 import Studio from './components/Studio.jsx';
 import History from './components/History.jsx';
 import Settings from './components/Settings.jsx';
+import Strategy from './components/Strategy.jsx';
 import Login from './components/Login.jsx';
 import Landing from './components/Landing.jsx';
 import './App.css';
@@ -25,8 +26,10 @@ export default function App() {
     window.history.replaceState(null, '', window.location.pathname);
     return { type, msg: q.get('msg') || 'No se pudo conectar Instagram' };
   });
-  const [screen, setScreen] = useState(igFlash ? 'settings' : 'studio'); // studio | history | settings
+  const [screen, setScreen] = useState(igFlash ? 'settings' : 'studio'); // studio | strategy | history | settings
   const [historyKey, setHistoryKey] = useState(0);
+  // Hueco elegido en Estrategia → el Estudio abre en modo programar con esa fecha
+  const [slot, setSlot] = useState(null);
 
   useEffect(() => {
     fetch('/api/auth/config').then(r => r.json()).then(c => setSignupOpen(c.signupOpen !== false)).catch(() => {});
@@ -43,6 +46,7 @@ export default function App() {
 
   function navigate(key) {
     if (key === 'history') setHistoryKey(k => k + 1);
+    if (key !== 'studio') setSlot(null);
     setScreen(key);
   }
 
@@ -86,7 +90,13 @@ export default function App() {
           </div>
         )}
         <main className="app-main">
-          {screen === 'studio' && <Studio onOpenSettings={() => navigate('settings')} />}
+          {screen === 'studio' && <Studio key={slot || 'studio'} initialSlot={slot} onOpenSettings={() => navigate('settings')} />}
+          {screen === 'strategy' && (
+            <Strategy
+              onUseSlot={iso => { setSlot(iso); setScreen('studio'); }}
+              onOpenSettings={() => navigate('settings')}
+            />
+          )}
           {screen === 'history' && <History key={historyKey} />}
           {screen === 'settings' && <Settings igFlash={igFlash} />}
         </main>
