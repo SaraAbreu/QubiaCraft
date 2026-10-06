@@ -159,6 +159,11 @@ app.use('/api', (req, res, next) =>
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// Funciones que se activan desde el .env. Crear imágenes con IA consume
+// saldo de Pollinations: queda "en desarrollo" hasta IMAGE_GEN_ENABLED=true.
+const IMAGE_GEN_ENABLED = process.env.IMAGE_GEN_ENABLED === 'true';
+app.get('/api/features', (req, res) => res.json({ imageGen: IMAGE_GEN_ENABLED }));
+
 // ─── API: Cuentas (registro, login, sesión) ─────────────────────────────────
 app.get('/api/auth/config', (req, res) => res.json(auth.signupConfig()));
 
@@ -210,6 +215,29 @@ app.post('/api/auth/login', async (req, res) => {
   auth.clearAttempts(key);
   auth.setSession(res, user.id);
   res.json({ user: auth.publicUser(user) });
+});
+
+// Borrar la cuenta: pide la contraseña y elimina perfil, publicaciones,
+// fotos, voz y conexión de Instagram. No se puede deshacer.
+app.post('/api/account/delete', async (req, res) => {
+  const key = `del:${req.user.id}`;
+  if (auth.tooManyAttempts(key)) return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos.' });
+  const user = await repo.findUserByEmail(req.user.email);
+  const ok = user ? await auth.checkPassword(String(req.body?.password || ''), user.password_hash) : false;
+  if (!ok) {
+    auth.recordAttempt(key);
+    return res.status(403).json({ error: 'La contraseña no es correcta' });
+  }
+  try {
+    const files = await repo.deleteUser(user.id);
+    deleteImages(files);
+    auth.clearSession(res);
+    console.log(`[auth] Cuenta ${user.id} eliminada a petición del usuario`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[auth] Error al borrar la cuenta:', err.message);
+    res.status(500).json({ error: 'No se pudo borrar la cuenta. Inténtalo de nuevo.' });
+  }
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -311,6 +339,7 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
 
 // ─── API: Generar imagen con IA (Pollinations.AI, sin API key) ──────────────
 app.post('/api/generate-image', express.json(), async (req, res) => {
+  if (!IMAGE_GEN_ENABLED) return res.status(403).json({ error: 'Crear imágenes con IA está en desarrollo.' });
   try {
     const { description } = req.body;
     if (!description || !description.trim()) {
@@ -498,32 +527,32 @@ app.get('/api/verticals', (req, res) => {
 // ─── API: Estrategia (cuándo y qué publicar) ─────────────────────────────────
 // Pautas del sector + fechas clave + ritmo propio. No usa estadísticas de
 // Instagram (requieren un permiso aparte): las horas son orientativas.
-const TZ = 'Atlantic/Canary';
+const ZONES = { canarias: 'Atlantic/Canary', peninsula: 'Europe/Madrid' };
 const WEEKDAYS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
 
-function localParts(date) {
-  const f = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short' });
+function localParts(date, tz) {
+  const f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short' });
   const o = Object.fromEntries(f.formatToParts(date).map(x => [x.type, x.value]));
   const wd = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(o.weekday) + 1;
   return { y: +o.year, m: +o.month, d: +o.day, h: +o.hour % 24, min: +o.minute, wd };
 }
 
-// Hora local de Canarias → instante UTC (tiene en cuenta el horario de verano)
-function zonedToUtc(y, m, d, h) {
+// Hora local de la zona → instante UTC (tiene en cuenta el horario de verano)
+function zonedToUtc(y, m, d, h, tz) {
   const guess = Date.UTC(y, m - 1, d, h);
-  const p = localParts(new Date(guess));
+  const p = localParts(new Date(guess), tz);
   const offset = Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - guess;
   return new Date(guess - offset);
 }
 
-function nextSlots(strategy, posts, count = 3) {
+function nextSlots(strategy, posts, tz, count = 3) {
   const taken = posts.filter(p => p.status === 'scheduled' && p.scheduledFor).map(p => new Date(p.scheduledFor).getTime());
   const now = Date.now(), out = [];
   for (let i = 0; i < 21 && out.length < count; i++) {
-    const day = localParts(new Date(now + i * 86400000));
+    const day = localParts(new Date(now + i * 86400000), tz);
     if (!strategy.days.includes(day.wd)) continue;
     for (const h of strategy.hours) {
-      const at = zonedToUtc(day.y, day.m, day.d, h);
+      const at = zonedToUtc(day.y, day.m, day.d, h, tz);
       const t = at.getTime();
       if (t < now + 30 * 60000) continue;
       if (taken.some(x => Math.abs(x - t) < 12 * 3600000)) continue; // ese día ya hay algo
@@ -539,28 +568,33 @@ app.get('/api/strategy', async (req, res) => {
   const [profile, posts] = await Promise.all([repo.getProfile(uid), repo.listPosts(uid)]);
   const vertical = resolveVertical(profile?.tipoNegocio);
   const s = strategyFor(vertical.key);
+  const zone = ZONES[profile?.zonaPublico] ? profile.zonaPublico : 'canarias';
+  const tz = ZONES[zone];
 
   const now = Date.now();
   const published = posts.filter(p => p.status === 'published' && p.publishedAt);
   const last30 = published.filter(p => now - new Date(p.publishedAt).getTime() < 30 * 86400000);
+  const last7 = published.filter(p => now - new Date(p.publishedAt).getTime() < 7 * 86400000).length;
   const byWeekday = Array(7).fill(0);
-  for (const p of published) byWeekday[localParts(new Date(p.publishedAt)).wd - 1]++;
+  for (const p of published) byWeekday[localParts(new Date(p.publishedAt), tz).wd - 1]++;
   const lastAt = published.map(p => p.publishedAt).sort().pop() || null;
 
   res.json({
     vertical: { key: vertical.key, label: vertical.label, icon: vertical.icon || '' },
     hasProfile: !!profile?.tipoNegocio,
-    timezone: TZ,
+    zone,
+    timezone: tz,
     bestDays: s.days.map(d => WEEKDAYS[d - 1]),
     bestHours: s.hours,
     why: s.why,
     formats: s.formats,
     publish: s.publish,
     avoid: s.avoid,
-    nextSlots: nextSlots(s, posts),
+    nextSlots: nextSlots(s, posts, tz),
     keyDates: upcomingKeyDates(vertical.key),
     activity: {
       publishedLast30: last30.length,
+      publishedLast7: last7,
       perWeekLast30: Math.round((last30.length / 30) * 7 * 10) / 10,
       scheduled: posts.filter(p => p.status === 'scheduled').length,
       lastPublishedAt: lastAt,
@@ -569,6 +603,15 @@ app.get('/api/strategy', async (req, res) => {
       targetPerWeek: 3,
     },
   });
+});
+
+// Dónde está el público principal: las horas recomendadas son de esa zona.
+app.post('/api/strategy/zone', async (req, res) => {
+  const zona = req.body?.zona;
+  if (!ZONES[zona]) return res.status(400).json({ error: 'Zona no válida' });
+  const profile = (await repo.getProfile(req.user.id)) || {};
+  await repo.saveProfile(req.user.id, { ...profile, zonaPublico: zona });
+  res.json({ success: true, zona });
 });
 
 // ─── API: Conexión con Instagram (OAuth, una cuenta por usuario) ─────────────
@@ -772,6 +815,7 @@ if (IS_PROD) {
 
 async function start() {
   await initDb();
+  await repo.sealLegacyIgConnections();
   app.listen(PORT, () => {
     console.log(`Qubia Craft corriendo en http://localhost:${PORT}`);
     if (!IS_PROD) console.log(`Frontend dev: http://localhost:5173`);

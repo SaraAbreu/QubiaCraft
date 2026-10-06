@@ -1,0 +1,15 @@
+.delete-account { margin-top: 28px; padding: 18px 20px; border: 1px solid rgba(239,68,68,0.35); border-radius: var(--radius); background: rgba(239,68,68,0.05); }
+.delete-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.delete-head h3 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.delete-head p { font-size: 13px; color: var(--text2); max-width: 560px; line-height: 1.5; }
+.delete-open, .delete-confirm { font: inherit; font-size: 13px; font-weight: 600; color: #fca5a5; background: none; border: 1px solid rgba(239,68,68,0.5); border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; }
+.delete-open:hover, .delete-confirm:hover { background: rgba(239,68,68,0.12); }
+.delete-confirm { color: #fff; background: var(--danger); border-color: var(--danger); }
+.delete-confirm:disabled { opacity: .6; cursor: wait; }
+.delete-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+.delete-form input { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); padding: 9px 12px; font: inherit; font-size: 14px; }
+.delete-form input:focus { outline: none; border-color: var(--danger); }
+.delete-error { grid-column: 1 / -1; font-size: 13px; color: #fca5a5; }
+.delete-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; }
+.delete-cancel { font: inherit; font-size: 13px; color: var(--text2); background: none; border: none; padding: 8px 12px; cursor: pointer; }
+@media (max-width: 640px) { .delete-form { grid-template-columns: 1fr; } }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DeleteAccount from './DeleteAccount.jsx';
 import './Settings.css';
 import InstagramConnect from './InstagramConnect.jsx';
 
@@ -7,7 +8,7 @@ const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 // Los tipos de negocio salen del registro de módulos del servidor
 // (GET /api/verticals) para no duplicar la lista aquí.
 
-export default function Settings({ igFlash }) {
+export default function Settings({ igFlash, onAccountDeleted }) {
   const [form, setForm] = useState({
     nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', cta: '', hashtags: '', vertical: {}
   });
@@ -185,6 +186,8 @@ export default function Settings({ igFlash }) {
           <button type="submit" className="btn btn-primary">Guardar perfil</button>
         </div>
       </form>
+
+      <DeleteAccount onDeleted={onAccountDeleted} />
     </div>
   );
 }

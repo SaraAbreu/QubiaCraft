@@ -98,7 +98,7 @@ export default function App() {
             />
           )}
           {screen === 'history' && <History key={historyKey} />}
-          {screen === 'settings' && <Settings igFlash={igFlash} />}
+          {screen === 'settings' && <Settings igFlash={igFlash} onAccountDeleted={() => { setUser(null); setAuthMode(null); setScreen('studio'); }} />}
         </main>
       </div>
     </div>

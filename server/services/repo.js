@@ -1,6 +1,7 @@
 // Acceso a datos por usuario. Todas las consultas de publicaciones filtran
 // por user_id: un usuario nunca ve ni toca lo de otro.
 import { query, one } from '../db.js';
+import { seal, open, isSealed } from './secretbox.js';
 
 const iso = d => (d ? new Date(d).toISOString() : null);
 
@@ -156,20 +157,40 @@ export async function countScheduled() {
 }
 
 // ─── Conexiones de Instagram (una por usuario) ──────────────────────────────
+// El token se guarda cifrado (services/secretbox.js).
 export async function getIgConnection(userId) {
   const r = await one(`SELECT data FROM instagram_connections WHERE user_id = $1`, [userId]);
-  return r?.data || null;
+  return r ? open(r.data) : null;
 }
 export async function saveIgConnection(userId, conn) {
   await query(
     `INSERT INTO instagram_connections (user_id, data, updated_at) VALUES ($1, $2::jsonb, now())
      ON CONFLICT (user_id) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
-    [userId, JSON.stringify(conn)]
+    [userId, JSON.stringify(seal(conn))]
   );
 }
 export async function deleteIgConnection(userId) {
   await query(`DELETE FROM instagram_connections WHERE user_id = $1`, [userId]);
 }
 export async function allIgConnections() {
-  return query(`SELECT user_id, data FROM instagram_connections`);
+  const rows = await query(`SELECT user_id, data FROM instagram_connections`);
+  return rows.map(r => ({ user_id: r.user_id, data: open(r.data) })).filter(r => r.data);
+}
+// Cifra las conexiones que se guardaron antes de existir el cifrado.
+export async function sealLegacyIgConnections() {
+  const rows = await query(`SELECT user_id, data FROM instagram_connections`);
+  let n = 0;
+  for (const r of rows) {
+    if (!isSealed(r.data)) { await saveIgConnection(r.user_id, r.data); n++; }
+  }
+  if (n) console.log(`[db] ${n} conexión(es) de Instagram cifradas`);
+}
+
+// ─── Borrar una cuenta y todos sus datos ────────────────────────────────────
+// Devuelve los archivos de imagen para que el servidor los borre del disco.
+export async function deleteUser(userId) {
+  const posts = await query(`SELECT image_files FROM posts WHERE user_id = $1`, [userId]);
+  const files = posts.flatMap(p => p.image_files || []);
+  await query(`DELETE FROM users WHERE id = $1`, [userId]); // perfiles, posts, voz e Instagram: ON DELETE CASCADE
+  return files;
 }

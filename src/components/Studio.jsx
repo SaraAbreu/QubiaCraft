@@ -3,13 +3,16 @@ import './Studio.css';
 import './InstagramConnect.css';
 import PostActions from './PostActions.jsx';
 import CropFrame from './CropFrame.jsx';
+import Icon from './Icon.jsx';
+import './StudioLayout.css';
 import { RATIOS, BACKGROUNDS, DEFAULT_FRAME, resolveRatio, ratioLabel, renderFramed, loadImage } from '../lib/framing.js';
 
 const TONOS = [
-  { label: 'Inspiracional', icon: '✨' },
-  { label: 'Cercano', icon: '💬' },
-  { label: 'Comercial', icon: '🎯' },
+  { label: 'Inspiracional', icon: 'sparkle' },
+  { label: 'Cercano', icon: 'chat' },
+  { label: 'Comercial', icon: 'tag' },
 ];
+const STEPS = ['Fotos', 'Texto', 'Publicar'];
 
 const STATUS_META = {
   pending: { label: 'Pendiente', cls: 'st-pending' },
@@ -35,16 +38,6 @@ function formatFull(iso) {
 
 const MAX_IMAGES = 10;
 
-function next7Days() {
-  const days = [];
-  const now = new Date();
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(now);
-    d.setDate(now.getDate() + i);
-    days.push(d);
-  }
-  return days;
-}
 
 // ISO → valor para <input type="datetime-local"> en la hora local del navegador
 const toLocalInput = iso => {
@@ -84,6 +77,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   const [aiMode, setAiMode] = useState(false);
   const [aiDescription, setAiDescription] = useState('');
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [imageGenOn, setImageGenOn] = useState(false); // IMAGE_GEN_ENABLED en el .env
   const inputRef = useRef();
 
   // Panel 2 — contenido generado
@@ -109,6 +103,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     fetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => setProfile({}));
     fetch('/api/instagram/status').then(r => r.json()).then(setIgStatus).catch(() => setIgStatus(null));
     fetch('/api/verticals').then(r => r.json()).then(setVerticals).catch(() => setVerticals([]));
+    fetch('/api/features').then(r => r.json()).then(f => setImageGenOn(!!f.imageGen)).catch(() => {});
     refreshHistory();
   }, []);
 
@@ -129,16 +124,6 @@ export default function Studio({ onOpenSettings, initialSlot }) {
       || null;
   }, [verticals, profile]);
 
-  const stats = useMemo(() => {
-    const s = { pending: 0, scheduled: 0, published: 0, rejected: 0 };
-    history.forEach(h => {
-      if (h.status === 'pending' || h.status === 'publishing') s.pending++;
-      else if (h.status === 'scheduled') s.scheduled++;
-      else if (h.status === 'published' || h.status === 'published_demo') s.published++;
-      else if (h.status === 'rejected' || h.status === 'error') s.rejected++;
-    });
-    return s;
-  }, [history]);
 
   const upcoming = useMemo(() => {
     return [...history]
@@ -147,20 +132,9 @@ export default function Studio({ onOpenSettings, initialSlot }) {
         const db = b.scheduledFor || b.date;
         return new Date(db) - new Date(da);
       })
-      .slice(0, 6);
+      .slice(0, 8);
   }, [history]);
 
-  const dayMarkers = useMemo(() => {
-    const days = next7Days();
-    return days.map(d => {
-      const key = d.toDateString();
-      const count = history.filter(h => {
-        const ref = h.scheduledFor || h.date;
-        return ref && new Date(ref).toDateString() === key;
-      }).length;
-      return { date: d, count };
-    });
-  }, [history]);
 
   // Cualquier cambio en las fotos invalida el contenido ya generado.
   function invalidateContent() {
@@ -390,106 +364,127 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
   const minDateTime = new Date(Date.now() + 5 * 60000).toISOString().slice(0, 16);
 
+  const step = result ? 3 : captions.length ? 2 : items.length ? 1 : 0;
+  const connected = igStatus?.connected || igStatus?.legacyEnv;
+  const brandName = profile?.nombre || '';
+  const fileInput = (
+    <input
+      ref={inputRef}
+      type="file"
+      accept="image/*"
+      multiple
+      style={{ display: 'none' }}
+      onChange={e => { addFiles(e.target.files); e.target.value = ''; }}
+    />
+  );
+
   return (
-    <div className="studio">
-      <div className="studio-header">
-        <h1>Estudio de contenido</h1>
-        <p>De la imagen a una publicación lista para Instagram, en tres pasos.</p>
-      </div>
+    <div className="studio sx">
+      {/* ── Cabecera ── */}
+      <header className="sx-top">
+        <div>
+          <h1>Estudio</h1>
+          <p>Tus fotos, con tu voz, listas para Instagram.</p>
+        </div>
+        <div className="sx-top-right">
+          {brandName ? (
+            <button
+              className="sx-brand"
+              onClick={onOpenSettings}
+              title={activeVertical?.limites?.length ? `La IA respeta: ${activeVertical.limites.join(' · ')}` : 'Editar perfil de marca'}
+            >
+              <span className="sx-brand-avatar">{brandName.slice(0, 1).toUpperCase()}</span>
+              <span className="sx-brand-text">
+                <strong>{brandName}</strong>
+                {activeVertical && <small><Icon name={activeVertical.key} size={13} /> {activeVertical.label}</small>}
+              </span>
+            </button>
+          ) : (
+            <button className="sx-brand empty" onClick={onOpenSettings}>
+              <Icon name="pen" size={16} /> Configura tu perfil de marca
+            </button>
+          )}
+          {igStatus && (
+            <button className={`sx-ig ${connected ? 'on' : ''}`} onClick={connected ? undefined : onOpenSettings} title={connected ? 'Cuenta conectada' : 'Conectar Instagram'}>
+              <Icon name="instagram" size={15} />
+              {igStatus.connected ? `@${igStatus.username}` : igStatus.legacyEnv ? 'Token del .env' : 'Modo demo · Conectar'}
+            </button>
+          )}
+        </div>
+      </header>
 
-      <div className="studio-grid">
-        {/* ── Panel 1: Información del contenido ── */}
-        <section className="studio-panel">
-          <div className="panel-head">
-            <span className="panel-step">01</span>
-            <div>
-              <h2>Información del contenido</h2>
-              <p>Tu perfil de marca y la imagen a publicar</p>
+      {/* ── Pasos ── */}
+      <ol className="sx-steps" aria-label="Pasos">
+        {STEPS.map((label, i) => (
+          <li key={label} className={i < step ? 'done' : i === step ? 'current' : ''}>
+            <span className="sx-step-num">{i < step ? <Icon name="check" size={14} stroke={2.2} /> : i + 1}</span>
+            {label}
+          </li>
+        ))}
+      </ol>
+
+      <div className="sx-main">
+        {/* ── Lienzo: fotos y vista previa ── */}
+        <section className="sx-canvas">
+          {!items.length ? (
+            <div className="sx-empty">
+              <div className="sx-seg" role="tablist">
+                <button className={!aiMode ? 'active' : ''} onClick={() => setAiMode(false)}><Icon name="upload" size={15} /> Subir fotos</button>
+                <button
+                  className={aiMode ? 'active' : ''}
+                  onClick={() => imageGenOn && setAiMode(true)}
+                  disabled={!imageGenOn}
+                  title={imageGenOn ? 'Crear una imagen desde una descripción' : 'En desarrollo: estará disponible pronto'}
+                >
+                  <Icon name="sparkle" size={15} /> Crear imagen con IA
+                  {!imageGenOn && <span className="sx-soon">En desarrollo</span>}
+                </button>
+              </div>
+
+              {aiMode && imageGenOn ? (
+                <div className="sx-ai">
+                  <textarea
+                    value={aiDescription}
+                    onChange={e => setAiDescription(e.target.value)}
+                    rows={4}
+                    placeholder="Escaparate de la tienda con luz cálida de atardecer"
+                    disabled={aiGenerating}
+                  />
+                  <button className="sx-primary" onClick={generateAiImage} disabled={aiGenerating}>
+                    {aiGenerating ? <><span className="spinner" /> Creando imagen…</> : <><Icon name="sparkle" size={16} /> Crear imagen</>}
+                  </button>
+                  <p className="sx-hint">Usa tu saldo de Pollinations y puede tardar unos segundos.</p>
+                </div>
+              ) : (
+                <div
+                  className={`sx-drop ${dragging ? 'dragging' : ''}`}
+                  onDragOver={e => { e.preventDefault(); setDragging(true); }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={onDrop}
+                  onClick={() => inputRef.current.click()}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <span className="sx-drop-icon"><Icon name="images" size={34} stroke={1.3} /></span>
+                  <p className="sx-drop-title">Arrastra tus fotos aquí</p>
+                  <p className="sx-drop-sub">o <u>elígelas</u> de tu ordenador</p>
+                  <p className="sx-hint">JPG, PNG o WEBP · de 2 a {MAX_IMAGES} fotos se publican como carrusel</p>
+                  {fileInput}
+                </div>
+              )}
             </div>
-          </div>
-
-          <div className="panel-body">
-            {profile?.nombre ? (
-              <div className="brand-summary card">
-                <div className="brand-summary-row">
-                  <span className="brand-summary-name">{profile.nombre}</span>
-                  <button className="link-btn" onClick={onOpenSettings}>Editar</button>
-                </div>
-                {activeVertical && (
-                  <div className="module-badge" title="La IA adapta el contenido a este sector">
-                    <span className="module-icon">{activeVertical.icon}</span>
-                    <div className="module-info">
-                      <span className="module-kicker">Módulo activo</span>
-                      <span className="module-label">{activeVertical.label}</span>
-                    </div>
+          ) : (
+            <div className="sx-workspace">
+              <div className="sx-phone">
+                <div className="ig-header">
+                  <div className="ig-avatar"><span>{igInitials}</span></div>
+                  <div className="ig-username-wrap">
+                    <span className="ig-username">{igUser}</span>
+                    <span className="ig-location">{igLocation}</span>
                   </div>
-                )}
-                {activeVertical?.limites?.length > 0 && (
-                  <ul className="module-limits" aria-label="Límites del sector">
-                    {activeVertical.limites.map(l => <li key={l}>{l}</li>)}
-                  </ul>
-                )}
-                <div className="brand-summary-tags">
-                  {profile.tipoNegocio && profile.tipoNegocio !== activeVertical?.label && <span className="tag">{profile.tipoNegocio}</span>}
-                  {profile.tono && <span className="tag tag-muted">{profile.tono}</span>}
-                  {profile.ciudad && <span className="tag tag-muted">{profile.ciudad}</span>}
+                  <button className="sx-icon-btn" onClick={resetAll} title="Quitar todas las fotos"><Icon name="x" size={16} /></button>
                 </div>
-              </div>
-            ) : (
-              <div className="brand-summary card brand-summary-empty">
-                <p>Aún no configuraste tu perfil de marca.</p>
-                <button className="link-btn" onClick={onOpenSettings}>Configurar ahora →</button>
-              </div>
-            )}
-
-            {!preview ? (
-              <>
-                <div className="mode-toggle">
-                  <button className={`mode-btn ${!aiMode ? 'active' : ''}`} onClick={() => setAiMode(false)}>📸 Subir imagen</button>
-                  <button className={`mode-btn ${aiMode ? 'active' : ''}`} onClick={() => setAiMode(true)}>✨ Generar con IA</button>
-                </div>
-
-                {aiMode ? (
-                  <div className="ai-image-block">
-                    <textarea
-                      className="ai-image-textarea"
-                      value={aiDescription}
-                      onChange={e => setAiDescription(e.target.value)}
-                      rows={3}
-                      placeholder="Describe la imagen que quieres, ej: escaparate de la tienda con luz cálida de atardecer"
-                      disabled={aiGenerating}
-                    />
-                    <button className="btn btn-primary generate-btn" onClick={generateAiImage} disabled={aiGenerating}>
-                      {aiGenerating ? <><span className="spinner" /> Generando imagen…</> : '✨ Generar imagen con IA'}
-                    </button>
-                    <p className="ai-image-hint">Usa tu saldo de Pollinations — puede tardar unos segundos. Si ya tienes foto, súbela y no se genera nada.</p>
-                  </div>
-                ) : (
-                  <div
-                    className={`drop-zone ${dragging ? 'dragging' : ''}`}
-                    onDragOver={e => { e.preventDefault(); setDragging(true); }}
-                    onDragLeave={() => setDragging(false)}
-                    onDrop={onDrop}
-                    onClick={() => inputRef.current.click()}
-                  >
-                    <div className="drop-icon">📸</div>
-                    <p className="drop-title">Arrastra una o varias imágenes</p>
-                    <p className="drop-sub">o haz clic para seleccionar</p>
-                    <p className="drop-hint">JPG, PNG, WEBP · Hasta {MAX_IMAGES} fotos = carrusel</p>
-                    <input
-                      ref={inputRef}
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      style={{ display: 'none' }}
-                      onChange={e => { addFiles(e.target.files); e.target.value = ''; }}
-                    />
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="preview-block">
-                <div className="preview-image-wrap">
+                <div className="ig-media sx-media">
                   <CropFrame
                     src={preview}
                     natural={activeItem}
@@ -498,13 +493,32 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                     bg={frame.bg}
                     focus={activeItem?.focus}
                     onFocus={f => setItemFocus(activeIdx, f)}
-                    maxHeight={320}
-                    className="preview-frame"
+                    maxHeight={460}
+                    className="ig-image"
                   />
-                  {isCarousel && <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>}
-                  <button className="preview-remove" onClick={resetAll} title="Quitar todas">✕</button>
+                  {isCarousel && (
+                    <>
+                      <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>
+                      {activeIdx > 0 && <button className="ig-nav prev" onClick={() => setActiveIdx(activeIdx - 1)}>‹</button>}
+                      {activeIdx < items.length - 1 && <button className="ig-nav next" onClick={() => setActiveIdx(activeIdx + 1)}>›</button>}
+                    </>
+                  )}
                 </div>
+                {isCarousel && (
+                  <div className="ig-dots">
+                    {items.map((_, i) => <span key={i} className={i === activeIdx ? 'on' : ''} />)}
+                  </div>
+                )}
+                <div className="sx-caption-preview">
+                  {caption ? (
+                    <p><strong>{igUser}</strong> {caption}</p>
+                  ) : (
+                    <div className="sx-skeleton" aria-hidden="true"><span /><span /><span /></div>
+                  )}
+                </div>
+              </div>
 
+              <div className="sx-tools">
                 <div className="thumb-strip">
                   {items.map((it, i) => (
                     <div key={it.url} className={`thumb ${i === activeIdx ? 'active' : ''}`}>
@@ -520,295 +534,195 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                     </div>
                   ))}
                   {items.length < MAX_IMAGES && (
-                    <button className="thumb thumb-add" onClick={() => inputRef.current.click()} title="Añadir fotos">+</button>
+                    <button className="thumb thumb-add" onClick={() => inputRef.current.click()} title="Añadir fotos"><Icon name="plus" size={18} /></button>
                   )}
-                  <input
-                    ref={inputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    style={{ display: 'none' }}
-                    onChange={e => { addFiles(e.target.files); e.target.value = ''; }}
-                  />
-                </div>
-                <div className="frame-controls">
-                  <div className="frame-row">
-                    {RATIOS.map(r => (
-                      <button
-                        key={r.key}
-                        className={`frame-chip ${frame.ratio === r.key ? 'active' : ''}`}
-                        onClick={() => setFrame(fr => ({ ...fr, ratio: r.key }))}
-                        title={r.hint || 'Proporción de la foto'}
-                      >
-                        {r.value && <span className="ratio-icon" style={{ aspectRatio: String(r.value) }} />}
-                        {r.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="frame-row">
-                    <div className="mode-toggle frame-fit">
-                      <button className={`mode-btn ${frame.fit === 'cover' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'cover' }))}>✂️ Recortar</button>
-                      <button className={`mode-btn ${frame.fit === 'contain' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'contain' }))}>🖼️ Foto entera</button>
-                    </div>
-                  </div>
-                  {frame.fit === 'contain' && (
-                    <div className="frame-row">
-                      <span className="frame-label">Fondo</span>
-                      {BACKGROUNDS.map(b => (
-                        <button key={b.key} className={`frame-chip ${frame.bg === b.key ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, bg: b.key }))}>{b.label}</button>
-                      ))}
-                    </div>
-                  )}
-                  <p className="frame-hint">
-                    {frame.fit === 'cover' ? 'Arrastra la foto para encuadrarla. ' : 'Se ve la foto completa, con bordes. '}
-                    {frame.ratio === 'original' && ratioInfo.adjusted
-                      ? `Instagram solo admite de 4:5 a 1.91:1: se ajusta a ${ratioLabel(ratioInfo.value)}.`
-                      : `Proporción ${ratioLabel(ratioInfo.value)}.`}
-                  </p>
+                  {fileInput}
                 </div>
 
-                {isCarousel && <p className="carousel-hint">Carrusel de {items.length} fotos · la IA analiza las 3 primeras. Todas usan la misma proporción; el encuadre es de cada foto.</p>}
-                <button className="btn btn-primary generate-btn" onClick={generate} disabled={generating}>
-                  {generating ? <><span className="spinner" /> Generando…</> : captions.length ? '🔄 Regenerar contenido' : '✨ Generar contenido'}
-                </button>
-              </div>
-            )}
-
-            {genError && <div className="inline-error">⚠️ {genError}</div>}
-          </div>
-        </section>
-
-        {/* ── Panel 2: Contenido y diseño ── */}
-        <section className="studio-panel">
-          <div className="panel-head">
-            <span className="panel-step">02</span>
-            <div>
-              <h2>Contenido y diseño</h2>
-              <p>Variantes generadas por IA, listas para editar</p>
-            </div>
-          </div>
-
-          <div className="panel-body">
-            {captions.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon">🪄</span>
-                <p>Sube una imagen en el paso 1 y genera contenido para ver las variantes aquí.</p>
-              </div>
-            ) : (
-              <>
-                <div className="variant-tabs">
-                  {captions.map((c, i) => (
+                <div className="sx-tool-row">
+                  <span className="sx-tool-label">Formato</span>
+                  {RATIOS.map(r => (
                     <button
-                      key={i}
-                      className={`variant-tab ${selected === i ? 'active' : ''}`}
-                      onClick={() => selectVariant(i)}
+                      key={r.key}
+                      className={`sx-chip ${frame.ratio === r.key ? 'active' : ''}`}
+                      onClick={() => setFrame(fr => ({ ...fr, ratio: r.key }))}
+                      title={r.hint || 'Proporción original de la foto'}
                     >
-                      <span>{TONOS[i]?.icon ?? '📝'}</span> {TONOS[i]?.label ?? `Opción ${i + 1}`}
+                      {r.value && <span className="ratio-icon" style={{ aspectRatio: String(r.value) }} />}
+                      {r.hint || r.label}
                     </button>
                   ))}
                 </div>
-
-                <div className="ig-post">
-                  <div className="ig-header">
-                    <div className="ig-avatar"><span>{igInitials}</span></div>
-                    <div className="ig-username-wrap">
-                      <span className="ig-username">{igUser}</span>
-                      <span className="ig-location">{igLocation}</span>
-                    </div>
-                    <span className="ig-more">•••</span>
-                  </div>
-                  <div className="ig-media">
-                    <CropFrame
-                      src={preview}
-                      natural={activeItem}
-                      ratio={ratioInfo.value}
-                      fit={frame.fit}
-                      bg={frame.bg}
-                      focus={activeItem?.focus}
-                      className="ig-image"
-                    />
-                    {isCarousel && (
-                      <>
-                        <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>
-                        {activeIdx > 0 && <button className="ig-nav prev" onClick={() => setActiveIdx(activeIdx - 1)}>‹</button>}
-                        {activeIdx < items.length - 1 && <button className="ig-nav next" onClick={() => setActiveIdx(activeIdx + 1)}>›</button>}
-                      </>
-                    )}
-                  </div>
-                  {isCarousel && (
-                    <div className="ig-dots">
-                      {items.map((_, i) => <span key={i} className={i === activeIdx ? 'on' : ''} />)}
-                    </div>
-                  )}
-                  <div className="ig-caption-preview">
-                    <span className="ig-caption-user">{igUser}</span>{' '}
-                    <span className="ig-caption-text">{caption.split('\n')[0].slice(0, 90)}</span>
-                  </div>
+                <div className="sx-tool-row">
+                  <span className="sx-tool-label">Ajuste</span>
+                  <button className={`sx-chip ${frame.fit === 'cover' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'cover' }))}>
+                    <Icon name="crop" size={14} /> Recortar
+                  </button>
+                  <button className={`sx-chip ${frame.fit === 'contain' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'contain' }))}>
+                    <Icon name="images" size={14} /> Foto entera
+                  </button>
+                  {frame.fit === 'contain' && BACKGROUNDS.map(b => (
+                    <button key={b.key} className={`sx-chip sx-chip-sm ${frame.bg === b.key ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, bg: b.key }))}>{b.label}</button>
+                  ))}
                 </div>
+                <p className="sx-hint">
+                  {frame.fit === 'cover' ? 'Arrastra la foto para encuadrarla. ' : ''}
+                  {frame.ratio === 'original' && ratioInfo.adjusted
+                    ? `Instagram admite de 4:5 a 1.91:1: se ajusta a ${ratioLabel(ratioInfo.value)}.`
+                    : `Proporción ${ratioLabel(ratioInfo.value)}.`}
+                  {isCarousel && ' Todas las fotos usan el mismo formato.'}
+                </p>
+              </div>
+            </div>
+          )}
+          {genError && <div className="inline-error">{genError}</div>}
+        </section>
 
-                <div className="caption-editor">
-                  <div className="caption-label">
-                    <span>Caption</span>
-                    <span className={`char-count ${charCount > charLimit ? 'over' : ''}`}>{charCount}/{charLimit}</span>
-                  </div>
-                  <textarea
-                    className="caption-textarea"
-                    value={caption}
-                    onChange={e => setCaption(e.target.value)}
-                    rows={8}
-                    maxLength={2500}
-                  />
-                </div>
-
-                <button className="btn btn-ghost copy-btn" onClick={copyCaption}>
-                  {copied ? '✅ ¡Copiado!' : '📋 Copiar caption'}
+        {/* ── Inspector: texto y publicación ── */}
+        <aside className="sx-inspector">
+          <div className={`sx-card ${!items.length ? 'locked' : ''}`}>
+            <div className="sx-card-head">
+              <span className="sx-card-icon"><Icon name="pen" size={16} /></span>
+              <h2>Texto</h2>
+              {captions.length > 0 && (
+                <button className="sx-link" onClick={generate} disabled={generating} title="Escribir otras versiones">
+                  {generating ? <span className="spinner" /> : <Icon name="refresh" size={14} />} Otras versiones
                 </button>
+              )}
+            </div>
+
+            {!captions.length ? (
+              <>
+                <p className="sx-text">
+                  {items.length
+                    ? <>La IA escribe tres versiones con la voz de <strong>{brandName || 'tu marca'}</strong>{activeVertical ? <> y las pautas de <strong>{activeVertical.label.toLowerCase()}</strong></> : null}.</>
+                    : 'Añade una o varias fotos y la IA escribirá el texto a partir de ellas.'}
+                </p>
+                {isCarousel && <p className="sx-hint">Carrusel de {items.length} fotos: la IA mira las 3 primeras.</p>}
+                <button className="sx-primary" onClick={generate} disabled={!items.length || generating}>
+                  {generating ? <><span className="spinner" /> Escribiendo…</> : <><Icon name="sparkle" size={16} /> Generar texto</>}
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="sx-seg sx-variants">
+                  {captions.map((c, i) => (
+                    <button key={i} className={selected === i ? 'active' : ''} onClick={() => selectVariant(i)}>
+                      <Icon name={TONOS[i]?.icon || 'pen'} size={14} /> {TONOS[i]?.label ?? `Opción ${i + 1}`}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  className="sx-textarea"
+                  value={caption}
+                  onChange={e => setCaption(e.target.value)}
+                  rows={9}
+                  maxLength={2500}
+                />
+                <div className="sx-text-foot">
+                  <span className={`char-count ${charCount > charLimit ? 'over' : ''}`}>{charCount}/{charLimit}</span>
+                  <button className="sx-link" onClick={copyCaption}>
+                    <Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Copiado' : 'Copiar'}
+                  </button>
+                </div>
               </>
             )}
           </div>
-        </section>
 
-        {/* ── Panel 3: Calendario y publicación ── */}
-        <section className="studio-panel">
-          <div className="panel-head">
-            <span className="panel-step">03</span>
-            <div>
-              <h2>Calendario y publicación</h2>
-              <p>Aprueba, programa y sigue el estado de tus posts</p>
-            </div>
-          </div>
-
-          <div className="panel-body">
-            {igStatus && (
-              <div className={`ig-status-line ${igStatus.connected || igStatus.legacyEnv ? 'on' : ''}`}>
-                <span className="dot" />
-                {igStatus.connected
-                  ? <span>Publicando en <strong>@{igStatus.username}</strong></span>
-                  : igStatus.legacyEnv
-                    ? <span>Publicando con el token del <strong>.env</strong></span>
-                    : <span><strong>Modo demo</strong> · no se publica en Instagram</span>}
-                {!igStatus.connected && (
-                  <button className="link-btn" onClick={onOpenSettings}>Conectar</button>
-                )}
-              </div>
-            )}
-
-            <div className="stats-row">
-              <div className="stat-tile">
-                <span className="stat-value">{stats.pending}</span>
-                <span className="stat-label">Pendientes</span>
-              </div>
-              <div className="stat-tile">
-                <span className="stat-value">{stats.scheduled}</span>
-                <span className="stat-label">Programadas</span>
-              </div>
-              <div className="stat-tile">
-                <span className="stat-value">{stats.published}</span>
-                <span className="stat-label">Publicadas</span>
-              </div>
-              <div className="stat-tile">
-                <span className="stat-value">{stats.rejected}</span>
-                <span className="stat-label">Rechazadas</span>
-              </div>
-            </div>
-
-            <div className="mini-calendar">
-              {dayMarkers.map(({ date, count }, i) => (
-                <div key={i} className={`mini-calendar-day ${i === 0 ? 'today' : ''}`}>
-                  <span className="mcd-dow">{date.toLocaleDateString('es-ES', { weekday: 'short' }).replace('.', '')}</span>
-                  <span className="mcd-num">{date.getDate()}</span>
-                  {count > 0 && <span className="mcd-dot" />}
-                </div>
-              ))}
+          <div className={`sx-card ${!jobId && !result ? 'locked' : ''}`}>
+            <div className="sx-card-head">
+              <span className="sx-card-icon"><Icon name="send" size={16} /></span>
+              <h2>Publicar</h2>
             </div>
 
             {result ? (
-              <div className="publish-result">
-                <div className="publish-result-icon">{result.scheduled ? '🗓️' : result.demo ? '✅' : '🎉'}</div>
-                <p className="publish-result-msg">{result.message}</p>
+              <div className="sx-done">
+                <span className="sx-done-icon"><Icon name={result.scheduled ? 'calendar' : 'check'} size={26} stroke={2} /></span>
+                <p>{result.message}</p>
                 {result.voiceExamples > 0 && (
-                  <p className="publish-result-voice">🧠 La IA guardó tu edición ({result.voiceExamples} ejemplo{result.voiceExamples === 1 ? '' : 's'} de tu voz)</p>
+                  <p className="sx-hint">La IA ha aprendido de tu edición ({result.voiceExamples} ejemplo{result.voiceExamples === 1 ? '' : 's'} de tu voz).</p>
                 )}
-                <button className="btn btn-primary" onClick={resetAll}>Nueva publicación</button>
+                <button className="sx-primary" onClick={resetAll}><Icon name="plus" size={16} /> Nueva publicación</button>
               </div>
             ) : (
-              <div className="publish-controls">
-                <div className="mode-toggle">
-                  <button className={`mode-btn ${mode === 'now' ? 'active' : ''}`} onClick={() => setMode('now')}>Publicar ahora</button>
-                  <button className={`mode-btn ${mode === 'schedule' ? 'active' : ''}`} onClick={() => setMode('schedule')}>Programar</button>
+              <>
+                <div className="sx-seg">
+                  <button className={mode === 'now' ? 'active' : ''} onClick={() => setMode('now')}><Icon name="zap" size={14} /> Ahora</button>
+                  <button className={mode === 'schedule' ? 'active' : ''} onClick={() => setMode('schedule')}><Icon name="clock" size={14} /> Programar</button>
                 </div>
 
                 {mode === 'schedule' && (
-                  <input
-                    type="datetime-local"
-                    className="schedule-input"
-                    min={minDateTime}
-                    value={scheduledFor}
-                    onChange={e => setScheduledFor(e.target.value)}
-                  />
-                )}
-
-                {mode === 'schedule' && suggested.length > 0 && (
-                  <div className="slot-suggest">
-                    <span>Buenos momentos para tu sector:</span>
-                    {suggested.map(sl => {
-                      const v = toLocalInput(sl.iso);
-                      return (
-                        <button key={sl.iso} type="button" className={`slot-chip ${scheduledFor === v ? 'active' : ''}`} onClick={() => setScheduledFor(v)}>
-                          {new Date(sl.iso).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {pubError && <div className="inline-error">⚠️ {pubError}</div>}
-
-                <div className="publish-actions">
-                  <button
-                    className="btn btn-success"
-                    onClick={submitPublish}
-                    disabled={!jobId || !caption.trim() || publishing}
-                  >
-                    {publishing ? <><span className="spinner" /> Enviando…</> : mode === 'schedule' ? '🗓️ Programar publicación' : '✅ Aprobar y publicar'}
-                  </button>
-                  <button className="btn btn-danger" onClick={reject} disabled={!jobId || publishing}>
-                    ❌ Rechazar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="upcoming-list">
-              <div className="upcoming-title">Próximas publicaciones</div>
-              {historyLoading ? (
-                <p className="upcoming-empty">Cargando…</p>
-              ) : upcoming.length === 0 ? (
-                <p className="upcoming-empty">Todavía no hay publicaciones generadas.</p>
-              ) : (
-                upcoming.map(item => {
-                  const meta = statusMeta(item.status);
-                  const dateRef = item.scheduledFor || item.date;
-                  return (
-                    <div
-                      key={item.id}
-                      className="upcoming-item clickable"
-                      onClick={() => setOpenPost(item)}
-                      title="Ver, editar, publicar o borrar"
-                    >
-                      <img src={item.image} alt="" className="upcoming-thumb" />
-                      <div className="upcoming-info">
-                        <span className={`status-dot ${meta.cls}`}>{meta.label}</span>
-                        <p className="upcoming-date">{item.scheduledFor ? `Programada: ${formatFull(dateRef)}` : formatShort(dateRef)}</p>
+                  <>
+                    {suggested.length > 0 && (
+                      <div className="slot-suggest">
+                        <span>Buenos momentos para tu sector</span>
+                        {suggested.map(sl => {
+                          const v = toLocalInput(sl.iso);
+                          return (
+                            <button key={sl.iso} type="button" className={`slot-chip ${scheduledFor === v ? 'active' : ''}`} onClick={() => setScheduledFor(v)}>
+                              {new Date(sl.iso).toLocaleString('es-ES', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </button>
+                          );
+                        })}
                       </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+                    )}
+                    <input
+                      type="datetime-local"
+                      className="schedule-input"
+                      min={minDateTime}
+                      value={scheduledFor}
+                      onChange={e => setScheduledFor(e.target.value)}
+                    />
+                  </>
+                )}
+
+                {pubError && <div className="inline-error">{pubError}</div>}
+
+                <button className="sx-primary" onClick={submitPublish} disabled={!jobId || !caption.trim() || publishing}>
+                  {publishing
+                    ? <><span className="spinner" /> Enviando…</>
+                    : mode === 'schedule'
+                      ? <><Icon name="calendar" size={16} /> Programar publicación</>
+                      : <><Icon name="send" size={16} /> {connected ? 'Publicar en Instagram' : 'Aprobar (modo demo)'}</>}
+                </button>
+                {jobId && (
+                  <button className="sx-discard" onClick={reject} disabled={publishing}>Descartar esta publicación</button>
+                )}
+              </>
+            )}
           </div>
-        </section>
+        </aside>
       </div>
+
+      {/* ── Cola de publicaciones ── */}
+      <section className="sx-queue">
+        <div className="sx-queue-head">
+          <h2>Tus publicaciones</h2>
+          <span className="sx-hint">Pulsa una para verla, editarla o publicarla</span>
+        </div>
+        {historyLoading ? (
+          <p className="sx-hint">Cargando…</p>
+        ) : upcoming.length === 0 ? (
+          <p className="sx-hint">Aquí aparecerán las publicaciones que vayas creando.</p>
+        ) : (
+          <div className="sx-queue-row">
+            {upcoming.map(item => {
+              const meta = statusMeta(item.status);
+              const dateRef = item.scheduledFor || item.date;
+              return (
+                <button key={item.id} className="sx-post" onClick={() => setOpenPost(item)}>
+                  <span className="sx-post-img">
+                    {item.image && <img src={item.image} alt="" />}
+                    {item.images?.length > 1 && <span className="sx-post-multi"><Icon name="layers" size={12} /></span>}
+                  </span>
+                  <span className={`status-dot ${meta.cls}`}>{meta.label}</span>
+                  <span className="sx-post-date">{item.scheduledFor ? formatFull(dateRef) : formatShort(dateRef)}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {openPost && (
         <div className="pa-overlay" onClick={() => setOpenPost(null)}>
