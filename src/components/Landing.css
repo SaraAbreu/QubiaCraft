@@ -280,6 +280,9 @@
 .lp-cta p { color: var(--text2); margin-bottom: 32px; font-size: 17px; }
 
 .lp-footer { border-top: 1px solid var(--border); padding: 28px 0; color: var(--text2); font-size: 13px; }
+.lp-legal { display: inline-flex; gap: 16px; }
+.lp-legal a { color: var(--text2); text-decoration: none; }
+.lp-legal a:hover { color: var(--accent); }
 .lp-footer-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
 /* Pantalla de acceso sobre la landing */

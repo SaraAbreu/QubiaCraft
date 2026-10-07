@@ -185,6 +185,7 @@ export default function Landing({ onAuth, signupOpen = true }) {
         <div className="lp-wrap lp-footer-inner">
           <span className="lp-brand small"><img src="/logo-mark.png" alt="" /><span>Qubia<strong>Craft</strong></span></span>
           <span>© {new Date().getFullYear()} Qubia Craft · Hecho en Canarias</span>
+          <span className="lp-legal"><a href="/privacidad">Privacidad</a><a href="/eliminacion-datos">Eliminación de datos</a></span>
           <button className="lp-btn-link" onClick={() => onAuth('login')}>Entrar</button>
         </div>
       </footer>

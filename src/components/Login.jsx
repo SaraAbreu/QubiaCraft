@@ -96,6 +96,11 @@ export default function Login({ onLogin, onBack, initialMode = 'login' }) {
 
           {error && <div className="login-error">⚠️ {error}</div>}
 
+          {isRegister && (
+            <p className="login-legal">
+              Al crear la cuenta aceptas la <a href="/privacidad" target="_blank" rel="noopener">política de privacidad</a>.
+            </p>
+          )}
           <button className="btn btn-primary login-submit" disabled={busy}>
             {busy ? <><span className="spinner" /> Un momento…</> : isRegister ? 'Crear cuenta' : 'Entrar'}
           </button>

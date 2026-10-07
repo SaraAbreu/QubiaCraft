@@ -18,6 +18,7 @@ import { initDb } from './db.js';
 import { hasLegacyData, migrateLegacyInto } from './services/legacy.js';
 import { startScheduler } from './services/scheduler.js';
 import * as ig from './services/instagram.js';
+import crypto from 'crypto';
 
 // Arquitectura por verticales: cada módulo (server/modules) define su propio
 // prompt, campos de perfil extra, estilo de imagen y ejemplos. 'generico' es
@@ -153,7 +154,7 @@ app.use(auth.loadUser);
 // - images: Meta tiene que poder descargar las fotos (nombres no adivinables)
 // - instagram/callback: vuelve desde Instagram, sin la cookie de la app
 // - verticals: catálogo de sectores (sin datos de usuario)
-const PUBLIC_API = [/^\/auth\//, /^\/images\//, /^\/instagram\/callback$/, /^\/verticals$/, /^\/health$/];
+const PUBLIC_API = [/^\/auth\//, /^\/images\//, /^\/instagram\/(callback|deauthorize|data-deletion)$/, /^\/verticals$/, /^\/health$/];
 app.use('/api', (req, res, next) =>
   PUBLIC_API.some(r => r.test(req.path)) ? next() : auth.requireAuth(req, res, next));
 
@@ -804,10 +805,54 @@ app.use('/api', (err, req, res, next) => {
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 
+// ─── Avisos de Meta: app desautorizada y solicitud de borrado de datos ───────
+// Meta llama a estas URLs (configuradas en el panel de la app) con un
+// signed_request firmado con la clave secreta de la app.
+function parseSignedRequest(signed) {
+  const secret = process.env.INSTAGRAM_APP_SECRET;
+  if (!signed || !secret || !signed.includes('.')) return null;
+  const [sig, payload] = signed.split('.');
+  const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+  const a = Buffer.from(sig.replace(/=+$/, '')), b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try { return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { return null; }
+}
+
+async function forgetInstagramUser(igUserId) {
+  let n = 0;
+  for (const row of await repo.allIgConnections()) {
+    if (String(row.data.igUserId) === String(igUserId)) { await repo.deleteIgConnection(row.user_id); n++; }
+  }
+  return n;
+}
+
+const metaForm = express.urlencoded({ extended: false });
+
+app.post('/api/instagram/deauthorize', metaForm, async (req, res) => {
+  const data = parseSignedRequest(req.body?.signed_request);
+  if (!data?.user_id) return res.status(400).json({ error: 'signed_request no válido' });
+  const n = await forgetInstagramUser(data.user_id);
+  console.log(`[instagram] App desautorizada por la cuenta ${data.user_id} (${n} conexión/es borradas)`);
+  res.json({ success: true });
+});
+
+app.post('/api/instagram/data-deletion', metaForm, async (req, res) => {
+  const data = parseSignedRequest(req.body?.signed_request);
+  if (!data?.user_id) return res.status(400).json({ error: 'signed_request no válido' });
+  const n = await forgetInstagramUser(data.user_id);
+  const code = `del-${crypto.randomBytes(6).toString('hex')}`;
+  console.log(`[instagram] Borrado de datos solicitado por ${data.user_id}: ${n} conexión/es borradas (${code})`);
+  const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+  res.json({ url: `${base}/eliminacion-datos?codigo=${code}`, confirmation_code: code });
+});
+
 // ─── Servir frontend en produccion ───────────────────────────────────────────
 if (IS_PROD) {
   const distPath = path.join(__file, '..', 'dist');
   app.use(express.static(distPath));
+  // Páginas legales con URL limpia (Meta y la landing enlazan a estas)
+  app.get('/privacidad', (req, res) => res.sendFile(path.join(distPath, 'privacidad.html')));
+  app.get('/eliminacion-datos', (req, res) => res.sendFile(path.join(distPath, 'eliminacion-datos.html')));
   app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
