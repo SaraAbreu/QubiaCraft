@@ -10,7 +10,7 @@ const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 
 export default function Settings({ igFlash, onAccountDeleted }) {
   const [form, setForm] = useState({
-    nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', cta: '', hashtags: '', vertical: {}
+    nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', persona: '', cta: '', hashtags: '', vertical: {}
   });
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -104,6 +104,15 @@ export default function Settings({ igFlash, onAccountDeleted }) {
             <label>Tono de comunicación</label>
             <select name="tono" value={form.tono} onChange={update}>
               {TONOS.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+
+          <div className="field-group">
+            <label>Hablar como</label>
+            <select name="persona" value={form.persona || ''} onChange={update}>
+              <option value="">Que lo decida la IA</option>
+              <option value="yo">Yo (profesional independiente)</option>
+              <option value="nosotros">Nosotros (equipo o negocio)</option>
             </select>
           </div>
 

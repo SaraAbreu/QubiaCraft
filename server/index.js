@@ -90,6 +90,11 @@ function profileContext(p) {
     p.ciudad    ? `Ubicación: ${p.ciudad}` : '',
     p.servicios ? `Productos/servicios: ${p.servicios}` : '',
     p.tono      ? `Tono de comunicación: ${p.tono}` : '',
+    p.persona === 'yo'
+      ? 'Voz: habla SIEMPRE en primera persona del singular (yo: "trabajo", "escríbeme", "te espero"). Nunca uses "nosotros".'
+      : p.persona === 'nosotros'
+        ? 'Voz: habla SIEMPRE en primera persona del plural, como equipo (nosotros: "trabajamos", "escríbenos", "te esperamos"). Nunca uses "yo" ni "escríbeme".'
+        : '',
     p.cta       ? `CTA habitual: ${p.cta}` : '',
     p.hashtags  ? `Hashtags propios: ${p.hashtags}` : '',
   ];
