@@ -53,7 +53,7 @@ export default function InstagramConnect({ flash }) {
           <span className="ig-connect-sub">Para publicar y programar directamente en tu cuenta</span>
         </div>
         <span className={`ig-pill ${status.connected ? 'on' : 'off'}`}>
-          {status.connected ? 'Conectada' : status.legacyEnv ? 'Token .env' : 'Modo demo'}
+          {status.connected ? 'Conectada' : status.legacyEnv ? 'Token .env' : 'Sin conectar'}
         </span>
       </div>
 
@@ -83,7 +83,10 @@ export default function InstagramConnect({ flash }) {
               Luego reinicia <code>npm run dev</code>.
             </p>
           ) : (
-            <p className="ig-note">Necesitas una cuenta profesional (empresa o creador). Te llevaremos a Instagram para autorizar a Qubia Craft.</p>
+            <>
+              <p className="ig-note">Necesitas una cuenta profesional (empresa o creador). Te llevaremos a Instagram para autorizar a Qubia Craft.</p>
+              <p className="ig-note">Durante el acceso anticipado, la conexión directa solo está disponible para cuentas invitadas. Mientras tanto, desde el Estudio puedes descargar las fotos y copiar el texto para publicarlos tú.</p>
+            </>
           )}
           <button type="button" className="btn btn-primary" onClick={connect} disabled={busy || !status.configured}>
             {busy ? <><span className="spinner" /> Abriendo Instagram…</> : 'Conectar mi Instagram'}

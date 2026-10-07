@@ -18,7 +18,7 @@ const STATUS_META = {
   pending: { label: 'Pendiente', cls: 'st-pending' },
   scheduled: { label: 'Programada', cls: 'st-scheduled' },
   published: { label: 'Publicada', cls: 'st-published' },
-  published_demo: { label: 'Aprobada (demo)', cls: 'st-published' },
+  published_demo: { label: 'Lista (manual)', cls: 'st-published' },
   publishing: { label: 'Publicando…', cls: 'st-pending' },
   rejected: { label: 'Rechazada', cls: 'st-rejected' },
   error: { label: 'Error', cls: 'st-rejected' },
@@ -87,6 +87,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   const [caption, setCaption] = useState('');
   const [originalCaption, setOriginalCaption] = useState('');
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // Panel 3 — publicación
   const [mode, setMode] = useState(initialSlot ? 'schedule' : 'now'); // now | schedule
@@ -304,6 +305,40 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     }
   }
 
+  // Publicación manual (sin Instagram conectado): descarga las fotos ya
+  // encuadradas. En el móvil abre el menú de compartir (guardar en la galería
+  // o mandarlas directamente a Instagram); en el ordenador las descarga.
+  async function downloadPhotos() {
+    if (!items.length) return;
+    setDownloading(true);
+    setPubError('');
+    try {
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const files = (await framedFiles()).map((f, i) =>
+        new File([f], `qubia-${stamp}-${i + 1}.jpg`, { type: 'image/jpeg' }));
+      const touch = window.matchMedia?.('(pointer: coarse)').matches;
+      if (touch && navigator.canShare?.({ files })) {
+        try { await navigator.share({ files }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+      } else {
+        for (const f of files) {
+          const url = URL.createObjectURL(f);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = f.name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          await new Promise(r => setTimeout(r, 350));
+        }
+      }
+    } catch {
+      setPubError('No se pudieron descargar las fotos');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   async function submitPublish() {
     if (!jobId || !caption.trim()) return;
     setPublishing(true);
@@ -407,7 +442,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
           {igStatus && (
             <button className={`sx-ig ${connected ? 'on' : ''}`} onClick={connected ? undefined : onOpenSettings} title={connected ? 'Cuenta conectada' : 'Conectar Instagram'}>
               <Icon name="instagram" size={15} />
-              {igStatus.connected ? `@${igStatus.username}` : igStatus.legacyEnv ? 'Token del .env' : 'Modo demo · Conectar'}
+              {igStatus.connected ? `@${igStatus.username}` : igStatus.legacyEnv ? 'Token del .env' : 'Publicación manual · Conectar'}
             </button>
           )}
         </div>
@@ -639,6 +674,16 @@ export default function Studio({ onOpenSettings, initialSlot }) {
               <div className="sx-done">
                 <span className="sx-done-icon"><Icon name={result.scheduled ? 'calendar' : 'check'} size={26} stroke={2} /></span>
                 <p>{result.message}</p>
+                {result.demo && items.length > 0 && (
+                  <div className="sx-manual-actions">
+                    <button className="sx-secondary" onClick={downloadPhotos} disabled={!items.length || downloading}>
+                      {downloading ? <><span className="spinner" /> Preparando…</> : <><Icon name="download" size={15} /> {items.length > 1 ? `Descargar ${items.length} fotos` : 'Descargar foto'}</>}
+                    </button>
+                    <button className="sx-secondary" onClick={copyCaption} disabled={!caption.trim()}>
+                      <Icon name={copied ? 'check' : 'copy'} size={15} /> {copied ? 'Copiado' : 'Copiar texto'}
+                    </button>
+                  </div>
+                )}
                 {result.voiceExamples > 0 && (
                   <p className="sx-hint">La IA ha aprendido de tu edición ({result.voiceExamples} ejemplo{result.voiceExamples === 1 ? '' : 's'} de tu voz).</p>
                 )}
@@ -676,14 +721,32 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                   </>
                 )}
 
+                {!connected && (
+                  <div className="sx-manual">
+                    <p className="sx-hint">
+                      <Icon name="info" size={14} /> Publicación manual: descarga las fotos ya encuadradas y copia el texto para subirlos tú a Instagram. La publicación directa llegará pronto.
+                    </p>
+                    <div className="sx-manual-actions">
+                      <button className="sx-secondary" onClick={downloadPhotos} disabled={!items.length || downloading}>
+                        {downloading ? <><span className="spinner" /> Preparando…</> : <><Icon name="download" size={15} /> {items.length > 1 ? `Descargar ${items.length} fotos` : 'Descargar foto'}</>}
+                      </button>
+                      <button className="sx-secondary" onClick={copyCaption} disabled={!caption.trim()}>
+                        <Icon name={copied ? 'check' : 'copy'} size={15} /> {copied ? 'Copiado' : 'Copiar texto'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {pubError && <div className="inline-error">{pubError}</div>}
 
                 <button className="sx-primary" onClick={submitPublish} disabled={!jobId || !caption.trim() || publishing}>
                   {publishing
                     ? <><span className="spinner" /> Enviando…</>
                     : mode === 'schedule'
-                      ? <><Icon name="calendar" size={16} /> Programar publicación</>
-                      : <><Icon name="send" size={16} /> {connected ? 'Publicar en Instagram' : 'Aprobar (modo demo)'}</>}
+                      ? <><Icon name="calendar" size={16} /> {connected ? 'Programar publicación' : 'Guardar en el calendario'}</>
+                      : connected
+                        ? <><Icon name="send" size={16} /> Publicar en Instagram</>
+                        : <><Icon name="check" size={16} /> Marcar como lista</>}
                 </button>
                 {jobId && (
                   <button className="sx-discard" onClick={reject} disabled={publishing}>Descartar esta publicación</button>

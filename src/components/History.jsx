@@ -6,7 +6,7 @@ const STATUS_LABEL = {
   pending: { label: 'Pendiente', cls: 'badge-pending' },
   scheduled: { label: 'Programado', cls: 'badge-scheduled' },
   published: { label: 'Publicado', cls: 'badge-published' },
-  published_demo: { label: 'Aprobado (demo)', cls: 'badge-demo' },
+  published_demo: { label: 'Lista (manual)', cls: 'badge-demo' },
   rejected: { label: 'Rechazado', cls: 'badge-rejected' },
   publishing: { label: 'Publicando...', cls: 'badge-pending' },
   error: { label: 'Error', cls: 'badge-rejected' },

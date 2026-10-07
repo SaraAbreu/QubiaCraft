@@ -400,7 +400,7 @@ async function doPublish(post) {
     result = {
       success: true,
       demo: true,
-      message: 'Modo demo: conecta tu Instagram en Perfil de marca para publicar de verdad. El caption se aprobó correctamente.'
+      message: 'Lista para publicar. Descarga las fotos y copia el texto para subirla a Instagram.'
     };
     patch = { status: 'published_demo', publishedAt: new Date().toISOString(), errorDetail: null };
   }

@@ -119,3 +119,14 @@
 .sx-post-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .sx-post-multi { position: absolute; top: 6px; right: 6px; color: #fff; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
 .sx-post-date { font-size: 11px; color: var(--text2); }
+
+/* Publicación manual (sin Instagram conectado) */
+.sx-manual { display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--bg2); }
+.sx-manual .sx-hint { display: flex; gap: 6px; align-items: flex-start; margin: 0; }
+.sx-manual .sx-hint .icon { flex-shrink: 0; margin-top: 2px; color: var(--accent2); }
+.sx-manual-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+.sx-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 12px; font: inherit; font-size: 13px; font-weight: 600; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: border-color .15s, color .15s; }
+.sx-secondary:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.sx-secondary:disabled { opacity: .45; cursor: not-allowed; }
+.sx-done .sx-manual-actions { margin: 4px 0 8px; }
+@media (max-width: 420px) { .sx-manual-actions { grid-template-columns: 1fr; } }
