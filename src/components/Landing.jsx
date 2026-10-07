@@ -172,7 +172,7 @@ export default function Landing({ onAuth, signupOpen = true }) {
         <div className="lp-wrap">
           <div className="lp-cta">
             <img src="/logo-mark.png" alt="" className="lp-cta-logo" />
-            <h2>Metricool te organiza las redes.<br /><span className="lp-grad">Qubia Craft te las llena.</span></h2>
+            <h2>Las demás herramientas te ordenan el calendario.<br /><span className="lp-grad">Qubia Craft te lo llena.</span></h2>
             <p>Sube tu primera foto hoy y mira lo que Qubia Craft escribe para ti.</p>
             <button className="lp-btn lp-btn-gold lp-btn-lg" onClick={start}>
               {ctaLabel} <Icon name="arrow" size={18} />
