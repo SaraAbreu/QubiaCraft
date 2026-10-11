@@ -2,7 +2,7 @@
 // Páginas (index.html): primero la red, para que cada despliegue llegue al
 // momento; la copia guardada solo se usa sin conexión. Recursos con hash
 // (/assets/…) e iconos: primero la caché, porque nunca cambian de contenido.
-const CACHE = 'qubia-craft-v2';
+const CACHE = 'qubia-craft-v3';
 const ASSETS = ['/', '/manifest.json'];
 
 self.addEventListener('install', e => {

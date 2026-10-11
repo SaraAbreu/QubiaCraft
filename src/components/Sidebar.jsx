@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './Sidebar.css';
+import InstallApp from './InstallApp.jsx';
 
 const ICONS = {
   studio: (
@@ -39,10 +40,10 @@ const ICONS = {
 };
 
 const NAV_ITEMS = [
-  { key: 'studio', label: 'Estudio', matches: ['studio'] },
-  { key: 'strategy', label: 'Estrategia', matches: ['strategy'] },
-  { key: 'history', label: 'Historial', matches: ['history'] },
-  { key: 'settings', label: 'Perfil de marca', matches: ['settings'] },
+  { key: 'studio', label: 'Estudio', short: 'Estudio', matches: ['studio'] },
+  { key: 'strategy', label: 'Estrategia', short: 'Estrategia', matches: ['strategy'] },
+  { key: 'history', label: 'Historial', short: 'Historial', matches: ['history'] },
+  { key: 'settings', label: 'Perfil de marca', short: 'Perfil', matches: ['settings'] },
 ];
 
 export default function Sidebar({ screen, onNavigate, user, onLogout }) {
@@ -76,10 +77,13 @@ export default function Sidebar({ screen, onNavigate, user, onLogout }) {
             >
               <span className="sidebar-nav-icon">{ICONS[item.key]}</span>
               <span className="sidebar-nav-label">{item.label}</span>
+              <span className="sidebar-nav-short">{item.short}</span>
             </button>
           );
         })}
       </nav>
+
+      <InstallApp variant="sidebar" />
 
       <button className="sidebar-nav-btn sidebar-logout" onClick={onLogout} title="Cerrar sesión">
         <span className="sidebar-nav-icon">{ICONS.logout}</span>

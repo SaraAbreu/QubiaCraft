@@ -128,3 +128,29 @@
 @media (max-width: 860px) {
   .sidebar-logout { margin: auto 8px 12px; }
 }
+
+.sidebar-nav-short { display: none; }
+
+/* ── Móvil: el menú pasa a una barra inferior, como en las apps ── */
+@media (max-width: 640px) {
+  .sidebar {
+    position: fixed; top: auto; bottom: 0; left: 0; right: 0; z-index: 50;
+    width: 100%; height: auto; flex-direction: row;
+    border-right: 0; border-top: 1px solid var(--border);
+    background: rgba(14, 27, 48, 0.94);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .sidebar-logo, .sidebar-footer, .sidebar-logout, .install-side-btn { display: none; }
+  .sidebar-nav { flex-direction: row; gap: 0; padding: 6px 6px 4px; width: 100%; }
+  .sidebar-nav-btn {
+    flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    padding: 7px 2px; border: 0; border-radius: 12px;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .1px;
+  }
+  .sidebar-nav-btn:hover { background: transparent; }
+  .sidebar-nav-btn.active { background: transparent; color: var(--accent); border: 0; }
+  .sidebar-nav-icon { width: 23px; height: 23px; }
+  .sidebar-nav-label { display: none; }
+  .sidebar-nav-short { display: block; line-height: 1.1; }
+}

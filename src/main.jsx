@@ -3,6 +3,14 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
 
+// El aviso de "Instalar app" llega una sola vez y muy pronto: lo guardamos
+// para que el botón de instalar (InstallApp.jsx) lo use cuando quiera.
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  window.__qcInstallPrompt = e;
+  window.dispatchEvent(new Event('qc:install-ready'));
+});
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js');

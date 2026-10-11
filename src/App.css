@@ -15,3 +15,11 @@
   padding: 32px;
   width: 100%;
 }
+
+/* ── Móvil / app instalada ── */
+@media (max-width: 640px) {
+  .app-shell { flex-direction: column; }
+  .app-main {
+    padding: calc(14px + env(safe-area-inset-top)) 14px calc(86px + env(safe-area-inset-bottom));
+  }
+}

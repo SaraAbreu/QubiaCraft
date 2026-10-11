@@ -6,6 +6,7 @@ import Settings from './components/Settings.jsx';
 import Strategy from './components/Strategy.jsx';
 import Login from './components/Login.jsx';
 import Landing from './components/Landing.jsx';
+import InstallApp from './components/InstallApp.jsx';
 import './App.css';
 import './components/Login.css';
 import './components/Landing.css';
@@ -26,7 +27,13 @@ export default function App() {
     window.history.replaceState(null, '', window.location.pathname);
     return { type, msg: q.get('msg') || 'No se pudo conectar Instagram' };
   });
-  const [screen, setScreen] = useState(igFlash ? 'settings' : 'studio'); // studio | strategy | history | settings
+  // Pantalla inicial: accesos directos del icono de la app (?s=strategy…)
+  const [screen, setScreen] = useState(() => {
+    if (igFlash) return 'settings';
+    const s = new URLSearchParams(window.location.search).get('s');
+    if (s || window.location.search.includes('source=pwa')) window.history.replaceState(null, '', window.location.pathname);
+    return ['studio', 'strategy', 'history', 'settings'].includes(s) ? s : 'studio';
+  }); // studio | strategy | history | settings
   const [historyKey, setHistoryKey] = useState(0);
   // Hueco elegido en Estrategia → el Estudio abre en modo programar con esa fecha
   const [slot, setSlot] = useState(null);
@@ -90,6 +97,7 @@ export default function App() {
           </div>
         )}
         <main className="app-main">
+          <InstallApp variant="banner" />
           {screen === 'studio' && <Studio key={slot || 'studio'} initialSlot={slot} onOpenSettings={() => navigate('settings')} />}
           {screen === 'strategy' && (
             <Strategy
@@ -98,7 +106,7 @@ export default function App() {
             />
           )}
           {screen === 'history' && <History key={historyKey} />}
-          {screen === 'settings' && <Settings igFlash={igFlash} onAccountDeleted={() => { setUser(null); setAuthMode(null); setScreen('studio'); }} />}
+          {screen === 'settings' && <Settings igFlash={igFlash} onLogout={logout} onAccountDeleted={() => { setUser(null); setAuthMode(null); setScreen('studio'); }} />}
         </main>
       </div>
     </div>

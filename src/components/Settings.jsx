@@ -9,7 +9,7 @@ const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 // Los tipos de negocio salen del registro de módulos del servidor
 // (GET /api/verticals) para no duplicar la lista aquí.
 
-export default function Settings({ igFlash, onAccountDeleted }) {
+export default function Settings({ igFlash, onAccountDeleted, onLogout }) {
   const [form, setForm] = useState({
     nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', persona: '', cta: '', hashtags: '', vertical: {}, brand: { ...DEFAULT_BRAND }
   });
@@ -275,6 +275,11 @@ export default function Settings({ igFlash, onAccountDeleted }) {
           <button type="submit" className="btn btn-primary">Guardar perfil</button>
         </div>
       </form>
+
+      {/* En el móvil el menú va abajo y no tiene "Cerrar sesión": va aquí */}
+      {onLogout && (
+        <button type="button" className="btn btn-ghost settings-logout" onClick={onLogout}>Cerrar sesión</button>
+      )}
 
       <DeleteAccount onDeleted={onAccountDeleted} />
     </div>

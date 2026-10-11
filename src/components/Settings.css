@@ -9,7 +9,7 @@
 
 .settings-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
 }
 
@@ -148,4 +148,15 @@
   .brand-kit-grid { grid-template-columns: 1fr; }
   .brand-logo { max-width: 200px; }
   .brand-colors, .brand-fonts { grid-template-columns: 1fr; }
+}
+
+.settings-logout { display: none; }
+@media (max-width: 640px) {
+  .settings-logout { display: flex; justify-content: center; width: 100%; margin: 20px 0 8px; }
+}
+
+/* Móvil: una sola columna y campos al ancho de la pantalla */
+@media (max-width: 640px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .field-group input, .field-group select, .field-group textarea { width: 100%; min-width: 0; }
 }
