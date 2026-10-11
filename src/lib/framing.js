@@ -50,7 +50,8 @@ export function loadImage(src) {
 
 // Genera la imagen final (JPEG) con el encuadre elegido.
 // focus: {x, y} de 0 a 1 — qué parte de la foto queda visible al recortar.
-export async function renderFramed(src, { ratio, fit, bg, focus = { x: 0.5, y: 0.5 } }, outWidth = 1080, quality = 0.9) {
+// overlay: función opcional (ctx, W, H) que dibuja una plantilla encima.
+export async function renderFramed(src, { ratio, fit, bg, focus = { x: 0.5, y: 0.5 }, overlay }, outWidth = 1080, quality = 0.9) {
   const img = await loadImage(src);
   const nw = img.naturalWidth, nh = img.naturalHeight;
   const W = outWidth, H = Math.round(outWidth / ratio);
@@ -77,6 +78,8 @@ export async function renderFramed(src, { ratio, fit, bg, focus = { x: 0.5, y: 0
     const dw = nw * s, dh = nh * s;
     ctx.drawImage(img, (W - dw) * focus.x, (H - dh) * focus.y, dw, dh);
   }
+
+  if (overlay) await overlay(ctx, W, H);
 
   return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
 }

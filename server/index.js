@@ -151,7 +151,7 @@ const upload = multer({
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' })); // el perfil puede llevar el logo (data URL)
 app.use(auth.loadUser);
 
 // Todo /api exige sesión salvo estas rutas públicas:
@@ -340,6 +340,45 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
   } catch (err) {
     console.error('Error en /api/generate:', err.response?.data || err.message);
     res.status(500).json({ error: 'Error generando caption', detail: err.message });
+  }
+});
+
+// ─── API: Titular corto para la plantilla "Titular" ──────────────────────────
+app.post('/api/headline', async (req, res) => {
+  const caption = String(req.body?.caption || '').slice(0, 2500).trim();
+  if (!caption) return res.status(400).json({ error: 'Genera primero el texto de la publicación' });
+  try {
+    const profile = await repo.getProfile(req.user.id);
+    const response = await axios.post(
+      'https://api.groq.com/openai/v1/chat/completions',
+      {
+        model: GROQ_VISION_MODEL,
+        ...groqReasoningOpts(),
+        messages: [SPANISH_ONLY, {
+          role: 'user',
+          content: `${profileContext(profile)}Este es el texto de una publicación de Instagram:
+
+${caption}
+
+Escribe UN titular para poner encima de la foto: máximo 6 palabras, directo y con gancho, sin hashtags, sin emojis, sin comillas y sin punto final. Responde solo con el titular.`
+        }],
+        max_tokens: 40,
+        temperature: 0.7
+      },
+      { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
+    );
+    const headline = removeCJK(stripThinking(response.data.choices[0].message.content))
+      .split('\n').map(l => l.trim()).find(Boolean)
+      ?.replace(/^["'«“]+|["'»”.]+$/g, '')
+      .replace(/#\S+/g, '')
+      .replace(/\p{Extended_Pictographic}/gu, '')
+      .trim()
+      .slice(0, 80) || '';
+    if (!headline) throw new Error('respuesta vacía');
+    res.json({ headline });
+  } catch (err) {
+    console.error('Error en /api/headline:', err.response?.data || err.message);
+    res.status(500).json({ error: 'No se pudo sugerir un titular' });
   }
 });
 
@@ -686,6 +725,10 @@ app.post('/api/profile', async (req, res) => {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       return res.status(400).json({ error: 'Perfil no válido' });
+    }
+    const logo = body.brand?.logo;
+    if (logo && (typeof logo !== 'string' || !/^data:image\/(png|jpeg|webp|svg\+xml);base64,/.test(logo) || logo.length > 1_500_000)) {
+      return res.status(400).json({ error: 'El logo no es válido o pesa demasiado' });
     }
     await repo.saveProfile(req.user.id, body);
     res.json({ success: true });

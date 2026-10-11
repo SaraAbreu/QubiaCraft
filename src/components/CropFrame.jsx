@@ -3,7 +3,7 @@ import { clamp } from '../lib/framing.js';
 
 // Vista previa de una foto con el encuadre elegido. Si se pasa onFocus y el
 // modo es "recortar", se puede arrastrar para elegir qué parte se ve.
-export default function CropFrame({ src, natural, ratio, fit, bg, focus, onFocus, maxHeight, className = '' }) {
+export default function CropFrame({ src, natural, ratio, fit, bg, focus, onFocus, maxHeight, className = '', children }) {
   const ref = useRef(null);
   const drag = useRef(null);
   const [dragging, setDragging] = useState(false);
@@ -63,6 +63,7 @@ export default function CropFrame({ src, natural, ratio, fit, bg, focus, onFocus
         }}
       />
       {dragging && <div className="crop-grid" />}
+      {children}
     </div>
   );
 }

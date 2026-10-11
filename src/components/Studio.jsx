@@ -6,6 +6,8 @@ import CropFrame from './CropFrame.jsx';
 import Icon from './Icon.jsx';
 import './StudioLayout.css';
 import { RATIOS, BACKGROUNDS, DEFAULT_FRAME, resolveRatio, ratioLabel, renderFramed, loadImage } from '../lib/framing.js';
+import { TEMPLATES, DEFAULT_DESIGN, DEFAULT_SCOPE, brandOf, appliesTo, hasContent, drawDesign } from '../lib/templates.js';
+import DesignOverlay from './DesignOverlay.jsx';
 
 const TONOS = [
   { label: 'Inspiracional', icon: 'sparkle' },
@@ -38,6 +40,24 @@ function formatFull(iso) {
 
 const MAX_IMAGES = 10;
 
+// Plantilla, alcance y posición se recuerdan entre publicaciones (solo en
+// este navegador); los textos no.
+const DESIGN_PREFS_KEY = 'qc.design';
+function loadDesign() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DESIGN_PREFS_KEY) || '{}');
+    const template = TEMPLATES.some(t => t.key === saved.template) ? saved.template : 'none';
+    return {
+      ...DEFAULT_DESIGN,
+      template,
+      scope: saved.scope === 'all' ? 'all' : 'first',
+      position: saved.position === 'top' ? 'top' : 'bottom',
+    };
+  } catch {
+    return { ...DEFAULT_DESIGN };
+  }
+}
+
 
 // ISO → valor para <input type="datetime-local"> en la hora local del navegador
 const toLocalInput = iso => {
@@ -65,7 +85,50 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   const [frame, setFrame] = useState(DEFAULT_FRAME);
   const [generatedFrameKey, setGeneratedFrameKey] = useState(null);
   const ratioInfo = resolveRatio(frame.ratio, items[0]);
-  const frameKey = JSON.stringify({ ...frame, r: ratioInfo.value, f: items.map(it => it.focus) });
+  const baseFrameKey = JSON.stringify({ ...frame, r: ratioInfo.value, f: items.map(it => it.focus) });
+
+  // Diseño (plantilla) que se dibuja encima de las fotos.
+  const [design, setDesign] = useState(loadDesign);
+  const [suggesting, setSuggesting] = useState(false);
+  const brand = useMemo(() => brandOf(profile), [profile]);
+  const designActive = design.template !== 'none' && hasContent(design, brand);
+  // La clave incluye el diseño: si cambia, al publicar se suben las fotos nuevas.
+  const frameKey = baseFrameKey + (designActive
+    ? JSON.stringify({ d: design, b: [brand.primary, brand.secondary, brand.font, brand.logo.length, brand.name] })
+    : '');
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DESIGN_PREFS_KEY, JSON.stringify({ template: design.template, scope: design.scope, position: design.position }));
+    } catch { /* sin almacenamiento: no pasa nada */ }
+  }, [design.template, design.scope, design.position]);
+
+  function updateDesign(patch) {
+    setDesign(d => ({ ...d, ...patch }));
+  }
+
+  function chooseTemplate(key) {
+    setDesign(d => ({ ...d, template: key, scope: DEFAULT_SCOPE[key] || d.scope }));
+  }
+
+  async function suggestHeadline() {
+    setSuggesting(true);
+    setGenError('');
+    try {
+      const res = await fetch('/api/headline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caption })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo sugerir un titular');
+      updateDesign({ headline: data.headline });
+    } catch (err) {
+      setGenError(err.message);
+    } finally {
+      setSuggesting(false);
+    }
+  }
   const activeItem = items[Math.min(activeIdx, items.length - 1)] || null;
 
   function setItemFocus(i, focus) {
@@ -171,11 +234,15 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     });
   }
 
-  // Las fotos tal y como se publicarán (proporción + encuadre), en JPEG.
-  async function framedFiles() {
+  // Las fotos tal y como se publicarán (proporción + encuadre + diseño), en
+  // JPEG. Para generar el texto se mandan sin diseño: la IA ve la foto limpia.
+  async function framedFiles(withDesign = true) {
     const out = [];
-    for (const it of items) {
-      const blob = await renderFramed(it.url, { ...frame, ratio: ratioInfo.value, focus: it.focus });
+    for (const [i, it] of items.entries()) {
+      const overlay = withDesign && designActive && appliesTo(design, i)
+        ? (ctx, W, H) => drawDesign(ctx, W, H, design, brand)
+        : null;
+      const blob = await renderFramed(it.url, { ...frame, ratio: ratioInfo.value, focus: it.focus, overlay });
       out.push(new File([blob], 'foto.jpg', { type: 'image/jpeg' }));
     }
     return out;
@@ -228,6 +295,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     setMode('now');
     setAiMode(false);
     setAiDescription('');
+    setDesign(d => ({ ...d, headline: '', offer: '', offerSub: '' }));
   }
 
   async function generateAiImage() {
@@ -268,8 +336,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     setGenError('');
     try {
       const form = new FormData();
-      for (const f of await framedFiles()) form.append('images', f);
-      const keyAtGeneration = frameKey;
+      for (const f of await framedFiles(false)) form.append('images', f);
+      const keyAtGeneration = baseFrameKey;
       const res = await fetch('/api/generate', { method: 'POST', body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error generando caption');
@@ -530,7 +598,11 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                     onFocus={f => setItemFocus(activeIdx, f)}
                     maxHeight={460}
                     className="ig-image"
-                  />
+                  >
+                    {designActive && appliesTo(design, activeIdx) && (
+                      <DesignOverlay ratio={ratioInfo.value} design={design} brand={brand} />
+                    )}
+                  </CropFrame>
                   {isCarousel && (
                     <>
                       <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>
@@ -661,6 +733,98 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                   </button>
                 </div>
               </>
+            )}
+          </div>
+
+          <div className={`sx-card ${!items.length ? 'locked' : ''}`}>
+            <div className="sx-card-head">
+              <span className="sx-card-icon"><Icon name="layers" size={16} /></span>
+              <h2>Diseño</h2>
+              <button className="sx-link" onClick={onOpenSettings} title="Logo, colores y tipografía">
+                <span className="sx-swatch" style={{ background: brand.primary }} />
+                <span className="sx-swatch" style={{ background: brand.secondary }} />
+                Kit de marca
+              </button>
+            </div>
+
+            <div className="sx-templates">
+              {TEMPLATES.map(t => (
+                <button
+                  key={t.key}
+                  className={`sx-template ${design.template === t.key ? 'active' : ''}`}
+                  onClick={() => chooseTemplate(t.key)}
+                  title={t.hint}
+                >
+                  <span className={`sx-template-thumb tpl-${t.key}`} style={{ '--tp': brand.primary, '--ts': brand.secondary }} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {design.template === 'titular' && (
+              <>
+                <div className="sx-field-row">
+                  <input
+                    className="sx-input"
+                    value={design.headline}
+                    onChange={e => updateDesign({ headline: e.target.value })}
+                    maxLength={80}
+                    placeholder="Escribe un titular corto"
+                  />
+                  <button
+                    className="sx-secondary sx-suggest"
+                    onClick={suggestHeadline}
+                    disabled={!caption.trim() || suggesting}
+                    title={caption.trim() ? 'La IA propone un titular a partir del texto' : 'Genera primero el texto'}
+                  >
+                    {suggesting ? <span className="spinner" /> : <Icon name="sparkle" size={14} />} Sugerir
+                  </button>
+                </div>
+                <div className="sx-tool-row">
+                  <span className="sx-tool-label">Posición</span>
+                  <button className={`sx-chip sx-chip-sm ${design.position === 'bottom' ? 'active' : ''}`} onClick={() => updateDesign({ position: 'bottom' })}>Abajo</button>
+                  <button className={`sx-chip sx-chip-sm ${design.position === 'top' ? 'active' : ''}`} onClick={() => updateDesign({ position: 'top' })}>Arriba</button>
+                </div>
+              </>
+            )}
+
+            {design.template === 'oferta' && (
+              <div className="sx-field-col">
+                <input
+                  className="sx-input"
+                  value={design.offer}
+                  onChange={e => updateDesign({ offer: e.target.value })}
+                  maxLength={16}
+                  placeholder="-20 %  ·  39 €  ·  2x1"
+                />
+                <input
+                  className="sx-input"
+                  value={design.offerSub}
+                  onChange={e => updateDesign({ offerSub: e.target.value })}
+                  maxLength={36}
+                  placeholder="Texto pequeño (opcional): Solo este mes"
+                />
+              </div>
+            )}
+
+            {design.template === 'marca' && (
+              <p className="sx-hint">
+                {brand.logo
+                  ? 'Tu logo en una esquina y un marco fino con tu color.'
+                  : <>Aún no tienes logo: se muestra el nombre de tu marca. <button className="sx-link sx-inline" onClick={onOpenSettings}>Subir logo</button></>}
+              </p>
+            )}
+
+            {design.template !== 'none' && isCarousel && (
+              <div className="sx-tool-row">
+                <span className="sx-tool-label">Aplicar a</span>
+                <button className={`sx-chip sx-chip-sm ${design.scope === 'first' ? 'active' : ''}`} onClick={() => updateDesign({ scope: 'first' })}>Solo la portada</button>
+                <button className={`sx-chip sx-chip-sm ${design.scope === 'all' ? 'active' : ''}`} onClick={() => updateDesign({ scope: 'all' })}>Todas las fotos</button>
+              </div>
+            )}
+
+            {design.template !== 'none' && !designActive && (
+              <p className="sx-hint">Escribe el texto y verás el diseño sobre la foto.</p>
             )}
           </div>
 

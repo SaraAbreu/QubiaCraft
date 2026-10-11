@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import DeleteAccount from './DeleteAccount.jsx';
 import './Settings.css';
 import InstagramConnect from './InstagramConnect.jsx';
+import { FONTS, DEFAULT_BRAND, shrinkLogo, textOn } from '../lib/templates.js';
 
 const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 
@@ -10,8 +11,9 @@ const TONOS = ['Profesional', 'Cercano', 'Inspiracional', 'Divertido'];
 
 export default function Settings({ igFlash, onAccountDeleted }) {
   const [form, setForm] = useState({
-    nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', persona: '', cta: '', hashtags: '', vertical: {}
+    nombre: '', instagram: '', tipoNegocio: '', sector: '', ciudad: '', servicios: '', tono: 'Cercano', persona: '', cta: '', hashtags: '', vertical: {}, brand: { ...DEFAULT_BRAND }
   });
+  const [logoError, setLogoError] = useState('');
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState({ count: 0, patterns: null });
@@ -23,7 +25,7 @@ export default function Settings({ igFlash, onAccountDeleted }) {
       fetch('/api/voice').then(r => r.json()),
       fetch('/api/verticals').then(r => r.json())
     ]).then(([profile, voiceData, verticalsData]) => {
-      if (profile) setForm(f => ({ ...f, ...profile, vertical: profile.vertical || {} }));
+      if (profile) setForm(f => ({ ...f, ...profile, vertical: profile.vertical || {}, brand: { ...DEFAULT_BRAND, ...(profile.brand || {}) } }));
       if (voiceData) setVoice(voiceData);
       if (Array.isArray(verticalsData)) setVerticals(verticalsData);
     }).finally(() => setLoading(false));
@@ -45,13 +47,36 @@ export default function Settings({ igFlash, onAccountDeleted }) {
     setForm(f => ({ ...f, vertical: { ...f.vertical, [name]: value } }));
   }
 
+  function updateBrand(patch) {
+    setSaved(false);
+    setForm(f => ({ ...f, brand: { ...f.brand, ...patch } }));
+  }
+
+  async function onLogo(e) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { setLogoError('Sube una imagen (PNG con fondo transparente es lo ideal)'); return; }
+    setLogoError('');
+    try {
+      updateBrand({ logo: await shrinkLogo(file) });
+    } catch {
+      setLogoError('No se pudo leer la imagen');
+    }
+  }
+
   async function save(e) {
     e.preventDefault();
-    await fetch('/api/profile', {
+    const res = await fetch('/api/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(form)
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setLogoError(data.error || 'No se pudo guardar el perfil');
+      return;
+    }
     setSaved(true);
   }
 
@@ -147,6 +172,61 @@ export default function Settings({ igFlash, onAccountDeleted }) {
             />
           </div>
 
+        </div>
+
+        {/* Kit de marca: lo usan las plantillas de diseño del Estudio */}
+        <div className="brand-kit">
+          <div className="brand-kit-head">
+            <span className="vertical-section-title">Kit de marca</span>
+            <span className="brand-kit-sub">Logo, colores y tipografía para las plantillas del Estudio</span>
+          </div>
+          <div className="brand-kit-grid">
+            <div className="brand-logo">
+              <div className="brand-logo-box" style={{ background: form.brand.secondary }}>
+                {form.brand.logo
+                  ? <img src={form.brand.logo} alt="Logo" />
+                  : <span style={{ color: textOn(form.brand.secondary) }}>Sin logo</span>}
+              </div>
+              <div className="brand-logo-actions">
+                <label className="btn btn-ghost btn-sm">
+                  {form.brand.logo ? 'Cambiar logo' : 'Subir logo'}
+                  <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={onLogo} hidden />
+                </label>
+                {form.brand.logo && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => updateBrand({ logo: '' })}>Quitar</button>
+                )}
+              </div>
+              <small>Mejor PNG con fondo transparente.</small>
+            </div>
+
+            <div className="brand-fields">
+              <div className="brand-colors">
+                <label className="brand-color">
+                  <input type="color" value={form.brand.primary} onChange={e => updateBrand({ primary: e.target.value })} />
+                  <span><strong>Color principal</strong><small>{form.brand.primary}</small></span>
+                </label>
+                <label className="brand-color">
+                  <input type="color" value={form.brand.secondary} onChange={e => updateBrand({ secondary: e.target.value })} />
+                  <span><strong>Color de fondo</strong><small>{form.brand.secondary}</small></span>
+                </label>
+              </div>
+              <div className="brand-fonts">
+                {Object.entries(FONTS).map(([key, f]) => (
+                  <button
+                    type="button"
+                    key={key}
+                    className={`brand-font ${form.brand.font === key ? 'active' : ''}`}
+                    onClick={() => updateBrand({ font: key })}
+                    style={{ fontFamily: `"${f.family}", system-ui`, fontWeight: f.weight }}
+                  >
+                    {f.upper ? (form.nombre || 'Tu marca').toUpperCase() : (form.nombre || 'Tu marca')}
+                    <small>{f.label}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+          {logoError && <p className="brand-error">{logoError}</p>}
         </div>
 
         {activeVertical && activeVertical.extraProfileFields.length > 0 && (
