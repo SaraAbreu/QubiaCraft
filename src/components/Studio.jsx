@@ -15,6 +15,8 @@ const TONOS = [
   { label: 'Comercial', icon: 'tag' },
 ];
 const STEPS = ['Fotos', 'Texto', 'Publicar'];
+const STORY_STEPS = ['Fotos', 'Diseño', 'Publicar'];
+const STORY_RATIO = 9 / 16; // 1080×1920
 
 const STATUS_META = {
   pending: { label: 'Pendiente', cls: 'st-pending' },
@@ -84,7 +86,10 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   // el encuadre con el que se generó el contenido, para saber si cambió.
   const [frame, setFrame] = useState(DEFAULT_FRAME);
   const [generatedFrameKey, setGeneratedFrameKey] = useState(null);
-  const ratioInfo = resolveRatio(frame.ratio, items[0]);
+  // Publicación (feed/carrusel) o historia (9:16, sin texto).
+  const [kind, setKind] = useState('feed');
+  const isStory = kind === 'story';
+  const ratioInfo = isStory ? { value: STORY_RATIO, adjusted: false } : resolveRatio(frame.ratio, items[0]);
   const baseFrameKey = JSON.stringify({ ...frame, r: ratioInfo.value, f: items.map(it => it.focus) });
 
   // Diseño (plantilla) que se dibuja encima de las fotos.
@@ -115,10 +120,16 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     setSuggesting(true);
     setGenError('');
     try {
+      // Historias (o sin texto aún): la IA mira la primera foto.
+      let image = null;
+      if (isStory || !caption.trim()) {
+        const blob = await renderFramed(items[0].url, { ...frame, ratio: ratioInfo.value, focus: items[0].focus }, 512, 0.8);
+        image = await new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(blob); });
+      }
       const res = await fetch('/api/headline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caption })
+        body: JSON.stringify(image ? { image } : { caption })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'No se pudo sugerir un titular');
@@ -199,6 +210,13 @@ export default function Studio({ onOpenSettings, initialSlot }) {
       .slice(0, 8);
   }, [history]);
 
+
+  function changeKind(k) {
+    if (k === kind) return;
+    setKind(k);
+    setGeneratedFrameKey(null);
+    invalidateContent();
+  }
 
   // Cualquier cambio en las fotos invalida el contenido ya generado.
   function invalidateContent() {
@@ -408,20 +426,34 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   }
 
   async function submitPublish() {
-    if (!jobId || !caption.trim()) return;
+    if (isStory ? !items.length : (!jobId || !caption.trim())) return;
     setPublishing(true);
     setPubError('');
     try {
-      // Si cambiaste el encuadre después de generar, se suben las fotos nuevas.
-      if (generatedFrameKey !== frameKey) {
+      let id = jobId;
+      let uploadedKey = generatedFrameKey;
+      // Historia: no hay texto que generar; se crea al publicar con las fotos ya diseñadas.
+      if (isStory && !id) {
         const form = new FormData();
         for (const f of await framedFiles()) form.append('images', f);
-        const up = await fetch(`/api/posts/${jobId}/images`, { method: 'POST', body: form });
+        const created = await fetch('/api/stories', { method: 'POST', body: form });
+        const cData = await created.json().catch(() => ({}));
+        if (!created.ok) throw new Error(cData.error || 'No se pudo preparar la historia');
+        id = cData.id;
+        uploadedKey = frameKey;
+        setJobId(id);
+        setGeneratedFrameKey(frameKey);
+      }
+      // Si cambiaste el encuadre o el diseño después de generar, se suben las fotos nuevas.
+      if (uploadedKey !== frameKey) {
+        const form = new FormData();
+        for (const f of await framedFiles()) form.append('images', f);
+        const up = await fetch(`/api/posts/${id}/images`, { method: 'POST', body: form });
         const upData = await up.json().catch(() => ({}));
         if (!up.ok) throw new Error(upData.error || 'No se pudo actualizar el encuadre');
         setGeneratedFrameKey(frameKey);
       }
-      const body = { id: jobId, caption, originalCaption };
+      const body = { id, caption: isStory ? '' : caption, originalCaption };
       if (mode === 'schedule') {
         if (!scheduledFor) { setPubError('Elige una fecha y hora para programar'); setPublishing(false); return; }
         body.scheduledFor = new Date(scheduledFor).toISOString();
@@ -467,7 +499,10 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
   const minDateTime = new Date(Date.now() + 5 * 60000).toISOString().slice(0, 16);
 
-  const step = result ? 3 : captions.length ? 2 : items.length ? 1 : 0;
+  const step = result ? 3
+    : isStory ? (items.length ? (designActive ? 2 : 1) : 0)
+    : captions.length ? 2 : items.length ? 1 : 0;
+  const steps = isStory ? STORY_STEPS : STEPS;
   const connected = igStatus?.connected || igStatus?.legacyEnv;
   const brandName = profile?.nombre || '';
   const fileInput = (
@@ -518,7 +553,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
       {/* ── Pasos ── */}
       <ol className="sx-steps" aria-label="Pasos">
-        {STEPS.map((label, i) => (
+        {steps.map((label, i) => (
           <li key={label} className={i < step ? 'done' : i === step ? 'current' : ''}>
             <span className="sx-step-num">{i < step ? <Icon name="check" size={14} stroke={2.2} /> : i + 1}</span>
             {label}
@@ -646,7 +681,12 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                   {fileInput}
                 </div>
 
-                <div className="sx-tool-row">
+                <div className="sx-seg sx-kind" role="tablist" aria-label="Tipo de publicación">
+                  <button className={!isStory ? 'active' : ''} onClick={() => changeKind('feed')}><Icon name="images" size={15} /> Publicación</button>
+                  <button className={isStory ? 'active' : ''} onClick={() => changeKind('story')}><Icon name="clock" size={15} /> Historia</button>
+                </div>
+
+                {!isStory && <div className="sx-tool-row">
                   <span className="sx-tool-label">Formato</span>
                   {RATIOS.map(r => (
                     <button
@@ -659,7 +699,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                       {r.hint || r.label}
                     </button>
                   ))}
-                </div>
+                </div>}
                 <div className="sx-tool-row">
                   <span className="sx-tool-label">Ajuste</span>
                   <button className={`sx-chip ${frame.fit === 'cover' ? 'active' : ''}`} onClick={() => setFrame(fr => ({ ...fr, fit: 'cover' }))}>
@@ -674,10 +714,12 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                 </div>
                 <p className="sx-hint">
                   {frame.fit === 'cover' ? 'Arrastra la foto para encuadrarla. ' : ''}
-                  {frame.ratio === 'original' && ratioInfo.adjusted
-                    ? `Instagram admite de 4:5 a 1.91:1: se ajusta a ${ratioLabel(ratioInfo.value)}.`
-                    : `Proporción ${ratioLabel(ratioInfo.value)}.`}
-                  {isCarousel && ' Todas las fotos usan el mismo formato.'}
+                  {isStory
+                    ? 'Historia vertical 9:16. Arriba y abajo Instagram pone tu nombre y la barra de respuesta: las plantillas ya dejan ese espacio libre.'
+                    : frame.ratio === 'original' && ratioInfo.adjusted
+                      ? `Instagram admite de 4:5 a 1.91:1: se ajusta a ${ratioLabel(ratioInfo.value)}.`
+                      : `Proporción ${ratioLabel(ratioInfo.value)}.`}
+                  {isCarousel && (isStory ? ' Cada foto será una historia, en este orden.' : ' Todas las fotos usan el mismo formato.')}
                 </p>
               </div>
             </div>
@@ -687,6 +729,15 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
         {/* ── Inspector: texto y publicación ── */}
         <aside className="sx-inspector">
+          {isStory ? (
+            <div className={`sx-card ${!items.length ? 'locked' : ''}`}>
+              <div className="sx-card-head">
+                <span className="sx-card-icon"><Icon name="clock" size={16} /></span>
+                <h2>Historia</h2>
+              </div>
+              <p className="sx-text">Las historias no llevan texto de publicación: lo que quieras decir va dentro de la imagen. Elige una plantilla en <strong>Diseño</strong> (Titular o Aviso funcionan muy bien) y publícala.</p>
+            </div>
+          ) : (
           <div className={`sx-card ${!items.length ? 'locked' : ''}`}>
             <div className="sx-card-head">
               <span className="sx-card-icon"><Icon name="pen" size={16} /></span>
@@ -736,6 +787,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
             )}
           </div>
 
+          )}
+
           <div className={`sx-card ${!items.length ? 'locked' : ''}`}>
             <div className="sx-card-head">
               <span className="sx-card-icon"><Icon name="layers" size={16} /></span>
@@ -761,7 +814,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
               ))}
             </div>
 
-            {design.template === 'titular' && (
+            {(design.template === 'titular' || design.template === 'aviso') && (
               <>
                 <div className="sx-field-row">
                   <input
@@ -774,17 +827,23 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                   <button
                     className="sx-secondary sx-suggest"
                     onClick={suggestHeadline}
-                    disabled={!caption.trim() || suggesting}
-                    title={caption.trim() ? 'La IA propone un titular a partir del texto' : 'Genera primero el texto'}
+                    disabled={!items.length || (!isStory && !caption.trim()) || suggesting}
+                    title={isStory ? 'La IA propone un titular mirando la foto' : caption.trim() ? 'La IA propone un titular a partir del texto' : 'Genera primero el texto'}
                   >
                     {suggesting ? <span className="spinner" /> : <Icon name="sparkle" size={14} />} Sugerir
                   </button>
                 </div>
-                <div className="sx-tool-row">
+                {design.template === 'aviso' && (
+                  <div className="sx-field-col">
+                    <input className="sx-input" value={design.label} onChange={e => updateDesign({ label: e.target.value })} maxLength={22} placeholder="Etiqueta: Novedad, Agenda abierta, Hoy…" />
+                    <input className="sx-input" value={design.sub} onChange={e => updateDesign({ sub: e.target.value })} maxLength={60} placeholder="Texto pequeño (opcional): Escríbeme por DM" />
+                  </div>
+                )}
+                {design.template === 'titular' && <div className="sx-tool-row">
                   <span className="sx-tool-label">Posición</span>
                   <button className={`sx-chip sx-chip-sm ${design.position === 'bottom' ? 'active' : ''}`} onClick={() => updateDesign({ position: 'bottom' })}>Abajo</button>
                   <button className={`sx-chip sx-chip-sm ${design.position === 'top' ? 'active' : ''}`} onClick={() => updateDesign({ position: 'top' })}>Arriba</button>
-                </div>
+                </div>}
               </>
             )}
 
@@ -828,7 +887,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
             )}
           </div>
 
-          <div className={`sx-card ${!jobId && !result ? 'locked' : ''}`}>
+          <div className={`sx-card ${(isStory ? !items.length : !jobId) && !result ? 'locked' : ''}`}>
             <div className="sx-card-head">
               <span className="sx-card-icon"><Icon name="send" size={16} /></span>
               <h2>Publicar</h2>
@@ -843,9 +902,11 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                     <button className="sx-secondary" onClick={downloadPhotos} disabled={!items.length || downloading}>
                       {downloading ? <><span className="spinner" /> Preparando…</> : <><Icon name="download" size={15} /> {items.length > 1 ? `Descargar ${items.length} fotos` : 'Descargar foto'}</>}
                     </button>
+                    {!isStory && (
                     <button className="sx-secondary" onClick={copyCaption} disabled={!caption.trim()}>
-                      <Icon name={copied ? 'check' : 'copy'} size={15} /> {copied ? 'Copiado' : 'Copiar texto'}
-                    </button>
+                        <Icon name={copied ? 'check' : 'copy'} size={15} /> {copied ? 'Copiado' : 'Copiar texto'}
+                      </button>
+                    )}
                   </div>
                 )}
                 {result.voiceExamples > 0 && (
@@ -888,28 +949,32 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                 {!connected && (
                   <div className="sx-manual">
                     <p className="sx-hint">
-                      <Icon name="info" size={14} /> Publicación manual: descarga las fotos ya encuadradas y copia el texto para subirlos tú a Instagram. La publicación directa llegará pronto.
+                      <Icon name="info" size={14} /> {isStory
+                        ? 'Publicación manual: descarga la imagen ya diseñada y súbela como historia desde Instagram.'
+                        : 'Publicación manual: descarga las fotos ya encuadradas y copia el texto para subirlos tú a Instagram. La publicación directa llegará pronto.'}
                     </p>
                     <div className="sx-manual-actions">
                       <button className="sx-secondary" onClick={downloadPhotos} disabled={!items.length || downloading}>
                         {downloading ? <><span className="spinner" /> Preparando…</> : <><Icon name="download" size={15} /> {items.length > 1 ? `Descargar ${items.length} fotos` : 'Descargar foto'}</>}
                       </button>
+                      {!isStory && (
                       <button className="sx-secondary" onClick={copyCaption} disabled={!caption.trim()}>
-                        <Icon name={copied ? 'check' : 'copy'} size={15} /> {copied ? 'Copiado' : 'Copiar texto'}
-                      </button>
+                          <Icon name={copied ? 'check' : 'copy'} size={15} /> {copied ? 'Copiado' : 'Copiar texto'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {pubError && <div className="inline-error">{pubError}</div>}
 
-                <button className="sx-primary" onClick={submitPublish} disabled={!jobId || !caption.trim() || publishing}>
+                <button className="sx-primary" onClick={submitPublish} disabled={isStory ? (!items.length || publishing) : (!jobId || !caption.trim() || publishing)}>
                   {publishing
                     ? <><span className="spinner" /> Enviando…</>
                     : mode === 'schedule'
-                      ? <><Icon name="calendar" size={16} /> {connected ? 'Programar publicación' : 'Guardar en el calendario'}</>
+                      ? <><Icon name="calendar" size={16} /> {connected ? (isStory ? 'Programar historia' : 'Programar publicación') : 'Guardar en el calendario'}</>
                       : connected
-                        ? <><Icon name="send" size={16} /> Publicar en Instagram</>
+                        ? <><Icon name="send" size={16} /> {isStory ? (items.length > 1 ? `Publicar ${items.length} historias` : 'Publicar historia') : 'Publicar en Instagram'}</>
                         : <><Icon name="check" size={16} /> Marcar como lista</>}
                 </button>
                 {jobId && (
@@ -940,7 +1005,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                 <button key={item.id} className="sx-post" onClick={() => setOpenPost(item)}>
                   <span className="sx-post-img">
                     {item.image && <img src={item.image} alt="" />}
-                    {item.images?.length > 1 && <span className="sx-post-multi"><Icon name="layers" size={12} /></span>}
+                    {item.images?.length > 1 && item.kind !== 'story' && <span className="sx-post-multi"><Icon name="layers" size={12} /></span>}
+                    {item.kind === 'story' && <span className="sx-post-story">Historia</span>}
                   </span>
                   <span className={`status-dot ${meta.cls}`}>{meta.label}</span>
                   <span className="sx-post-date">{item.scheduledFor ? formatFull(dateRef) : formatShort(dateRef)}</span>

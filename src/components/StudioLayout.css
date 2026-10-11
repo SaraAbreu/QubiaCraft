@@ -135,7 +135,7 @@
 .design-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .sx-swatch { width: 12px; height: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.25); display: inline-block; }
 .sx-swatch + .sx-swatch { margin-left: -6px; }
-.sx-templates { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.sx-templates { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .sx-template { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 4px; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--text2); background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; transition: border-color .15s, color .15s; }
 .sx-template:hover { color: var(--text); }
 .sx-template.active { color: var(--accent); border-color: var(--accent); }
@@ -161,3 +161,8 @@
   .sx-empty .sx-seg button { flex: 1 1 140px; white-space: normal; justify-content: center; }
   .sx-soon { font-size: 9.5px; }
 }
+
+/* Publicación / Historia */
+.sx-kind { margin-bottom: 2px; }
+.sx-post-story { position: absolute; left: 6px; bottom: 6px; padding: 1px 7px; font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #1a1206; background: var(--accent); border-radius: 999px; }
+.tpl-aviso::after { left: 10%; right: 10%; bottom: 12%; height: 30%; border-radius: 4px; background: var(--ts); box-shadow: inset 0 6px 0 -2px var(--tp); opacity: .92; }

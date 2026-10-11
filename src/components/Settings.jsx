@@ -264,8 +264,8 @@ export default function Settings({ igFlash, onAccountDeleted, onLogout }) {
           ) : (
             <p className="voice-empty">
               {voice.count === 0
-                ? 'Aún no hay datos. Edita un caption antes de aprobarlo y la IA irá aprendiendo tu estilo.'
-                : `${voice.count}/3 ediciones guardadas. Con 3 la IA activará el aprendizaje automático.`}
+                ? 'Aún no hay datos. Cada vez que cambias el texto que propone la IA (en el Estudio antes de publicar, o después en «Tus publicaciones») se guarda tu versión. Si publicas el texto tal cual, no hay nada que aprender.'
+                : `${voice.count}/3 ediciones guardadas. Con 3, la IA analiza cómo escribes y lo aplica a los próximos textos.`}
             </p>
           )}
         </div>

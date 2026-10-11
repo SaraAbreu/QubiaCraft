@@ -188,6 +188,21 @@ export async function publishImage(conn, imageUrl, caption) {
   return { containerId: creationId, mediaId: pub.data.id };
 }
 
+// Historia (story) con una imagen. Las historias no llevan caption.
+export async function publishStory(conn, imageUrl) {
+  const c = requireConnection(conn);
+  const base = `${GRAPH}/${API_VERSION}/${c.igUserId}`;
+  const container = await axios.post(`${base}/media`, null, {
+    params: { media_type: 'STORIES', image_url: imageUrl, access_token: c.accessToken },
+  });
+  const creationId = container.data.id;
+  await waitForContainer(creationId, c.accessToken);
+  const pub = await axios.post(`${base}/media_publish`, null, {
+    params: { creation_id: creationId, access_token: c.accessToken },
+  });
+  return { containerId: creationId, mediaId: pub.data.id };
+}
+
 // Carrusel: de 2 a 10 imágenes (límite de la API de Meta). Se crea un
 // contenedor por imagen (is_carousel_item) y luego el contenedor CAROUSEL
 // que las agrupa, en el orden recibido.

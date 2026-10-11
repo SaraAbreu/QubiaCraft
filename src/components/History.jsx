@@ -71,7 +71,9 @@ export default function History() {
                 <img src={item.image} alt="" className="history-thumb" />
                 <div className="history-item-info">
                   <span className={`badge ${s.cls}`}>{s.label}</span>
-                  {item.images?.length > 1 && <span className="badge badge-carousel">🖼 {item.images.length} fotos</span>}
+                  {item.kind === 'story'
+                    ? <span className="badge badge-carousel">Historia{item.images?.length > 1 ? ` · ${item.images.length}` : ''}</span>
+                    : item.images?.length > 1 && <span className="badge badge-carousel">🖼 {item.images.length} fotos</span>}
                   <p className="history-date">
                     {item.publishedAt
                       ? `Publicado: ${formatDate(item.publishedAt)}`

@@ -54,6 +54,7 @@ const POST_FIELDS = {
   publishedLate: 'published_late',
   errorDetail: 'error_detail',
   igMediaId: 'ig_media_id',
+  kind: 'kind',
 };
 
 // Fila de la BD → objeto de trabajo del servidor.
@@ -71,15 +72,16 @@ function toPost(r) {
     publishedLate: !!r.published_late,
     errorDetail: r.error_detail,
     igMediaId: r.ig_media_id,
+    kind: r.kind === 'story' ? 'story' : 'feed',
   };
 }
 
-export async function createPost(userId, { caption, status = 'pending', imageFiles = [], createdAt, scheduledFor, publishedAt, publishedLate, errorDetail, igMediaId }) {
+export async function createPost(userId, { caption, status = 'pending', imageFiles = [], createdAt, scheduledFor, publishedAt, publishedLate, errorDetail, igMediaId, kind = 'feed' }) {
   return toPost(await one(
-    `INSERT INTO posts (user_id, caption, status, image_files, created_at, scheduled_for, published_at, published_late, error_detail, ig_media_id)
-     VALUES ($1, $2, $3, $4::jsonb, COALESCE($5::timestamptz, now()), $6, $7, $8, $9, $10) RETURNING *`,
+    `INSERT INTO posts (user_id, caption, status, image_files, created_at, scheduled_for, published_at, published_late, error_detail, ig_media_id, kind)
+     VALUES ($1, $2, $3, $4::jsonb, COALESCE($5::timestamptz, now()), $6, $7, $8, $9, $10, $11) RETURNING *`,
     [userId, caption || '', status, JSON.stringify(imageFiles), createdAt || null, scheduledFor || null,
-     publishedAt || null, !!publishedLate, errorDetail || null, igMediaId || null]
+     publishedAt || null, !!publishedLate, errorDetail || null, igMediaId || null, kind === 'story' ? 'story' : 'feed']
   ));
 }
 

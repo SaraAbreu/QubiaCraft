@@ -343,10 +343,25 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
   }
 });
 
+// ─── API: Crear una historia (fotos ya preparadas, sin texto) ────────────────
+app.post('/api/stories', uploadImages, async (req, res) => {
+  const files = [...(req.files?.images || []), ...(req.files?.image || [])].slice(0, 10);
+  if (!files.length) return res.status(400).json({ error: 'No se recibió ninguna imagen' });
+  if (files.some(f => !f.mimetype?.startsWith('image/'))) return res.status(400).json({ error: 'Solo se admiten imágenes' });
+  const uid = req.user.id;
+  const imageFiles = files.map(f => saveImage(uid, f.buffer, f.mimetype));
+  const post = await repo.createPost(uid, { caption: '', imageFiles, status: 'pending', kind: 'story' });
+  res.json({ id: post.id });
+});
+
 // ─── API: Titular corto para la plantilla "Titular" ──────────────────────────
+// Con texto: a partir del caption. Sin texto (historias): mirando la foto
+// (image: data URL JPEG pequeña).
 app.post('/api/headline', async (req, res) => {
   const caption = String(req.body?.caption || '').slice(0, 2500).trim();
-  if (!caption) return res.status(400).json({ error: 'Genera primero el texto de la publicación' });
+  const image = typeof req.body?.image === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(req.body.image) && req.body.image.length < 1_500_000
+    ? req.body.image : null;
+  if (!caption && !image) return res.status(400).json({ error: 'Genera primero el texto de la publicación' });
   try {
     const profile = await repo.getProfile(req.user.id);
     const response = await axios.post(
@@ -356,11 +371,16 @@ app.post('/api/headline', async (req, res) => {
         ...groqReasoningOpts(),
         messages: [SPANISH_ONLY, {
           role: 'user',
-          content: `${profileContext(profile)}Este es el texto de una publicación de Instagram:
+          content: caption
+            ? `${profileContext(profile)}Este es el texto de una publicación de Instagram:
 
 ${caption}
 
 Escribe UN titular para poner encima de la foto: máximo 6 palabras, directo y con gancho, sin hashtags, sin emojis, sin comillas y sin punto final. Responde solo con el titular.`
+            : [
+              { type: 'image_url', image_url: { url: image } },
+              { type: 'text', text: `${profileContext(profile)}Esta foto va a ser una historia de Instagram de esta marca. Escribe UN titular para poner encima: máximo 6 palabras, directo y con gancho, relacionado con lo que se ve y con el negocio, sin hashtags, sin emojis, sin comillas y sin punto final. Responde solo con el titular.` },
+            ]
         }],
         max_tokens: 40,
         temperature: 0.7
@@ -415,6 +435,8 @@ async function doPublish(post) {
 
   let result, patch;
 
+  const isStory = post.kind === 'story';
+
   if (ig.isConnected(conn)) {
     if (!publicUrls.length) {
       result = {
@@ -424,18 +446,31 @@ async function doPublish(post) {
       };
       patch = { status: 'error', errorDetail: result.detail };
     } else {
+      let done = 0;
       try {
-        const { containerId, mediaId } = isCarousel
-          ? await ig.publishCarousel(conn, publicUrls, post.caption)
-          : await ig.publishImage(conn, publicUrls[0], post.caption);
+        let containerId, mediaId;
+        if (isStory) {
+          // Una historia por imagen, en orden.
+          for (const url of publicUrls) {
+            ({ containerId, mediaId } = await ig.publishStory(conn, url));
+            done++;
+          }
+        } else {
+          ({ containerId, mediaId } = isCarousel
+            ? await ig.publishCarousel(conn, publicUrls, post.caption)
+            : await ig.publishImage(conn, publicUrls[0], post.caption));
+        }
         result = {
           success: true, containerId, mediaId,
-          message: isCarousel ? `¡Carrusel de ${files.length} fotos publicado en Instagram!` : '¡Publicado en Instagram!'
+          message: isStory
+            ? (files.length > 1 ? `¡${files.length} historias publicadas en Instagram!` : '¡Historia publicada en Instagram!')
+            : isCarousel ? `¡Carrusel de ${files.length} fotos publicado en Instagram!` : '¡Publicado en Instagram!'
         };
         patch = { status: 'published', publishedAt: new Date().toISOString(), igMediaId: mediaId, errorDetail: null };
       } catch (err) {
         console.error(`Error publicando (usuario ${post.userId}):`, err.response?.data || err.message);
-        result = { success: false, error: 'Error publicando en Instagram', detail: ig.graphError(err) };
+        const partial = isStory && done > 0 ? `Se publicaron ${done} de ${files.length} historias. ` : '';
+        result = { success: false, error: 'Error publicando en Instagram', detail: partial + ig.graphError(err) };
         patch = { status: 'error', errorDetail: result.detail };
       }
     }
@@ -444,7 +479,9 @@ async function doPublish(post) {
     result = {
       success: true,
       demo: true,
-      message: 'Lista para publicar. Descarga las fotos y copia el texto para subirla a Instagram.'
+      message: isStory
+      ? 'Lista para publicar. Descarga la imagen y súbela como historia desde Instagram.'
+      : 'Lista para publicar. Descarga las fotos y copia el texto para subirla a Instagram.'
     };
     patch = { status: 'published_demo', publishedAt: new Date().toISOString(), errorDetail: null };
   }
@@ -473,10 +510,16 @@ function checkCaption(caption) {
 
 // Guarda el par (caption IA → caption editado) para aprender la voz del
 // usuario. A partir de 3 ejemplos analiza patrones en segundo plano.
+// Se guardan los últimos ejemplos (no todos: el análisis se haría eterno).
+const MAX_VOICE_EXAMPLES = 12;
+const sameText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim();
+
 async function learnVoice(uid, originalCaption, caption) {
-  if (!originalCaption || !caption || originalCaption.trim() === caption.trim()) return 0;
+  // Solo aprende si el usuario cambió algo de verdad (no espacios o saltos de línea).
+  if (!originalCaption || !caption || sameText(originalCaption, caption)) return 0;
   const voice = await repo.getVoice(uid);
-  voice.examples = [...(voice.examples || []), { original: originalCaption.trim(), final: caption.trim(), date: new Date().toISOString() }];
+  voice.examples = [...(voice.examples || []), { original: originalCaption.trim(), final: caption.trim(), date: new Date().toISOString() }]
+    .slice(-MAX_VOICE_EXAMPLES);
   await repo.saveVoice(uid, voice);
   const n = voice.examples.length;
   if (n >= 3) {
@@ -503,10 +546,11 @@ app.post('/api/publish', async (req, res) => {
   if (!EDITABLE.includes(post.status)) {
     return res.status(409).json({ success: false, error: 'Esta publicación ya se publicó o se está publicando' });
   }
-  const capErr = checkCaption(caption);
+  const isStory = post.kind === 'story';
+  const capErr = isStory ? null : checkCaption(caption);
   if (capErr) return res.status(400).json({ success: false, error: capErr });
 
-  const voiceExamples = await learnVoice(uid, originalCaption, caption);
+  const voiceExamples = isStory ? 0 : await learnVoice(uid, originalCaption, caption);
 
   // ¿Programada para el futuro?
   if (scheduledFor) {
@@ -755,7 +799,8 @@ function publicItem(p) {
     scheduledFor: p.scheduledFor,
     publishedAt: p.publishedAt,
     publishedLate: p.publishedLate,
-    errorDetail: p.errorDetail || null
+    errorDetail: p.errorDetail || null,
+    kind: p.kind || 'feed'
   };
 }
 
@@ -776,10 +821,13 @@ app.patch('/api/posts/:id', async (req, res) => {
   const { caption, scheduledFor } = req.body || {};
   const patch = { errorDetail: null, publishedLate: false };
 
+  let learnFrom = null;
   if (caption !== undefined) {
     const capErr = checkCaption(caption);
     if (capErr) return res.status(400).json({ error: capErr });
     patch.caption = String(caption);
+    // Editar desde "Tus publicaciones" o el Historial también enseña la voz.
+    if (!sameText(post.caption, caption)) learnFrom = post.caption;
   }
 
   if (scheduledFor !== undefined) {
@@ -801,7 +849,8 @@ app.patch('/api/posts/:id', async (req, res) => {
     ? await repo.transitionPost(uid, post.id, EDITABLE, patch)
     : await repo.updatePost(uid, post.id, patch);
   if (!updated) return res.status(409).json({ error: 'La publicación cambió mientras la editabas; recarga' });
-  res.json({ success: true, item: publicItem(updated) });
+  const voiceExamples = learnFrom ? await learnVoice(uid, learnFrom, patch.caption).catch(() => 0) : 0;
+  res.json({ success: true, item: publicItem(updated), voiceExamples });
 });
 
 // Publicar ya (también sirve para adelantar una programada o reintentar un error).

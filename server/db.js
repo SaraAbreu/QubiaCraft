@@ -77,6 +77,8 @@ async function migrate() {
       ig_media_id TEXT
     )`,
     `CREATE INDEX IF NOT EXISTS posts_user_created ON posts (user_id, created_at DESC)`,
+    // feed (publicación o carrusel) | story (historia)
+    `ALTER TABLE posts ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'feed'`,
     `CREATE INDEX IF NOT EXISTS posts_due ON posts (status, scheduled_for)`,
     `CREATE TABLE IF NOT EXISTS instagram_connections (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

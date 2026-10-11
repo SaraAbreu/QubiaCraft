@@ -23,10 +23,11 @@ export const TEMPLATES = [
   { key: 'titular', label: 'Titular', icon: 'pen', hint: 'Una frase grande sobre la foto' },
   { key: 'oferta', label: 'Oferta', icon: 'tag', hint: 'Precio o descuento destacado' },
   { key: 'marca', label: 'Marca', icon: 'star', hint: 'Tu logo y un marco fino' },
+  { key: 'aviso', label: 'Aviso', icon: 'megaphone', hint: 'Novedad, agenda abierta, horario…' },
 ];
 
 // Dónde se aplica por defecto cada plantilla en un carrusel.
-export const DEFAULT_SCOPE = { titular: 'first', oferta: 'first', marca: 'all' };
+export const DEFAULT_SCOPE = { titular: 'first', oferta: 'first', marca: 'all', aviso: 'first' };
 
 export const DEFAULT_DESIGN = {
   template: 'none',
@@ -35,6 +36,8 @@ export const DEFAULT_DESIGN = {
   position: 'bottom',    // titular: top | bottom
   offer: '',             // oferta: texto grande (-20 %, 39 €…)
   offerSub: '',          // oferta: texto pequeño (Solo este mes)
+  label: 'Novedad',      // aviso: etiqueta
+  sub: '',               // aviso: texto pequeño
 };
 
 export function brandOf(profile) {
@@ -60,6 +63,7 @@ export function hasContent(design, brand) {
     case 'titular': return !!design.headline.trim();
     case 'oferta': return !!design.offer.trim();
     case 'marca': return true;
+    case 'aviso': return !!design.headline.trim();
     default: return false;
   }
 }
@@ -147,6 +151,13 @@ function roundRect(ctx, x, y, w, h, r) {
 
 // ─── Plantillas ────────────────────────────────────────────────────────────
 
+// En las historias (9:16) Instagram tapa arriba (nombre, barra de progreso) y
+// abajo (responder, enlaces): ahí no ponemos nada importante.
+function safe(W, H) {
+  const tall = H / W > 1.6;
+  return { top: tall ? H * 0.13 : 0, bottom: tall ? H * 0.17 : 0 };
+}
+
 function drawTitular(ctx, W, H, d, brand) {
   const s = W / 1080;
   const raw = d.headline.trim();
@@ -155,6 +166,7 @@ function drawTitular(ctx, W, H, d, brand) {
   const text = font.upper ? raw.toUpperCase() : raw;
   const pad = 72 * s;
   const top = d.position === 'top';
+  const sz = safe(W, H);
 
   ctx.textBaseline = 'alphabetic';
   const { size, lines } = fit(ctx, text, brand.font, {
@@ -166,7 +178,7 @@ function drawTitular(ctx, W, H, d, brand) {
   const gap = 26 * s;
 
   // Degradado del color de marca para que el texto se lea sobre cualquier foto.
-  const gh = Math.min(H, blockH + accentH + gap + pad * 2.6);
+  const gh = Math.min(H, blockH + accentH + gap + pad * 2.6 + (top ? sz.top : sz.bottom));
   const g = top ? ctx.createLinearGradient(0, 0, 0, gh) : ctx.createLinearGradient(0, H, 0, H - gh);
   g.addColorStop(0, rgba(brand.secondary, 0.88));
   g.addColorStop(0.55, rgba(brand.secondary, 0.55));
@@ -175,8 +187,8 @@ function drawTitular(ctx, W, H, d, brand) {
   ctx.fillRect(0, top ? 0 : H - gh, W, gh);
 
   const textColor = textOn(brand.secondary);
-  let y = top ? pad + accentH + gap + size * 0.85 : H - pad - blockH + size * 0.85;
-  const accentY = top ? pad : y - size * 0.85 - gap - accentH;
+  let y = top ? sz.top + pad + accentH + gap + size * 0.85 : H - sz.bottom - pad - blockH + size * 0.85;
+  const accentY = top ? sz.top + pad : y - size * 0.85 - gap - accentH;
 
   ctx.fillStyle = brand.primary;
   roundRect(ctx, pad, accentY, 96 * s, accentH, accentH / 2);
@@ -200,7 +212,7 @@ function drawOferta(ctx, W, H, d, brand) {
   const sub = d.offerSub.trim();
   const D = Math.min(W, H) * 0.38;           // diámetro del sello
   const cx = W - D / 2 - 56 * s;
-  const cy = D / 2 + 56 * s;
+  const cy = D / 2 + 56 * s + safe(W, H).top;
   const r = D / 2;
 
   ctx.save();
@@ -257,6 +269,7 @@ async function drawMarca(ctx, W, H, d, brand) {
 
   const logo = await getLogo(brand.logo);
   const margin = 62 * s;
+  const lift = safe(W, H).bottom;
   if (logo) {
     const maxH = Math.min(W, H) * 0.12;
     const maxW = W * 0.3;
@@ -265,7 +278,7 @@ async function drawMarca(ctx, W, H, d, brand) {
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.35)';
     ctx.shadowBlur = 16 * s;
-    ctx.drawImage(logo, W - margin - w, H - margin - h, w, h);
+    ctx.drawImage(logo, W - margin - w, H - margin - lift - h, w, h);
     ctx.restore();
   } else if (brand.name) {
     // Sin logo: el nombre de la marca en una pastilla.
@@ -274,7 +287,7 @@ async function drawMarca(ctx, W, H, d, brand) {
     const text = FONTS[brand.font]?.upper ? brand.name.toUpperCase() : brand.name;
     const tw = Math.min(ctx.measureText(text).width, W * 0.6);
     const ph = size * 1.7, pw = tw + size * 1.4;
-    const x = W - margin - pw, y = H - margin - ph;
+    const x = W - margin - pw, y = H - margin - lift - ph;
     ctx.fillStyle = rgba(brand.secondary, 0.82);
     roundRect(ctx, x, y, pw, ph, ph / 2);
     ctx.fill();
@@ -282,6 +295,66 @@ async function drawMarca(ctx, W, H, d, brand) {
     ctx.textBaseline = 'middle';
     ctx.fillText(text, x + size * 0.7, y + ph / 2, W * 0.6);
     ctx.textBaseline = 'alphabetic';
+  }
+}
+
+// Aviso: franja con etiqueta (Novedad, Agenda abierta…), titular y texto
+// pequeño, en el tercio inferior (por encima de la zona que tapa Instagram).
+function drawAviso(ctx, W, H, d, brand) {
+  const s = W / 1080;
+  const raw = d.headline.trim();
+  if (!raw) return;
+  const font = FONTS[brand.font] || FONTS.moderna;
+  const text = font.upper ? raw.toUpperCase() : raw;
+  const label = (d.label || '').trim().toUpperCase();
+  const sub = (d.sub || '').trim();
+  const sz = safe(W, H);
+  const pad = 64 * s;
+  const innerW = W - pad * 4;
+
+  const { size, lines } = fit(ctx, text, brand.font, { maxW: innerW, maxLines: 3, start: (font.upper ? 118 : 92) * s, min: 40 * s });
+  const lh = size * (font.upper ? 1.0 : 1.12);
+  const labelSize = 26 * s;
+  const subSize = 30 * s;
+  ctx.font = fontCss('moderna', subSize, 600);
+  const subLines = sub ? wrap(ctx, sub, innerW).slice(0, 2) : [];
+  const gap = 26 * s;
+  const panelH = pad * 1.4 + (label ? labelSize * 2.2 + gap : 0) + lines.length * lh + (subLines.length ? gap + subLines.length * subSize * 1.3 : 0) + pad * 0.9;
+  const panelY = H - sz.bottom - pad - panelH;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 30 * s;
+  ctx.fillStyle = rgba(brand.secondary, 0.88);
+  roundRect(ctx, pad, panelY, W - pad * 2, panelH, 28 * s);
+  ctx.fill();
+  ctx.restore();
+
+  let y = panelY + pad * 1.2;
+  const x = pad * 2;
+  if (label) {
+    ctx.font = fontCss('moderna', labelSize, 800);
+    const lw = ctx.measureText(label).width + labelSize * 1.6;
+    const lhgt = labelSize * 2;
+    ctx.fillStyle = brand.primary;
+    roundRect(ctx, x, y, lw, lhgt, lhgt / 2);
+    ctx.fill();
+    ctx.fillStyle = textOn(brand.primary);
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x + labelSize * 0.8, y + lhgt / 2);
+    ctx.textBaseline = 'alphabetic';
+    y += lhgt + gap;
+  }
+  const color = textOn(brand.secondary);
+  ctx.fillStyle = color;
+  ctx.font = fontCss(brand.font, size);
+  y += size * 0.85;
+  for (const l of lines) { ctx.fillText(l, x, y); y += lh; }
+  if (subLines.length) {
+    y += gap - lh + size * 0.15 + subSize;
+    ctx.font = fontCss('moderna', subSize, 600);
+    ctx.fillStyle = rgba(color === '#ffffff' ? '#ffffff' : '#111111', 0.8);
+    for (const l of subLines) { ctx.fillText(l, x, y); y += subSize * 1.3; }
   }
 }
 
@@ -293,6 +366,7 @@ export async function drawDesign(ctx, W, H, design, brand) {
   if (design.template === 'titular') drawTitular(ctx, W, H, design, brand);
   else if (design.template === 'oferta') drawOferta(ctx, W, H, design, brand);
   else if (design.template === 'marca') await drawMarca(ctx, W, H, design, brand);
+  else if (design.template === 'aviso') drawAviso(ctx, W, H, design, brand);
   ctx.restore();
 }
 
