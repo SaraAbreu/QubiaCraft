@@ -51,6 +51,11 @@ export default function App() {
     return () => window.removeEventListener('qc:session-expired', onExpired);
   }, []);
 
+  // En cuanto sabemos si hay sesión, se va la pantalla de entrada.
+  useEffect(() => {
+    if (user !== undefined) window.__qcHideSplash?.();
+  }, [user]);
+
   function navigate(key) {
     if (key === 'history') setHistoryKey(k => k + 1);
     if (key !== 'studio') setSlot(null);
@@ -71,7 +76,7 @@ export default function App() {
     setScreen('studio');
   }
 
-  if (user === undefined) return <div className="app-loading">Cargando…</div>;
+  if (user === undefined) return null; // se ve la pantalla de entrada (index.html)
   if (!user) {
     if (!authMode) {
       return <Landing signupOpen={signupOpen} onAuth={mode => { setAuthMode(mode); window.scrollTo(0, 0); }} />;

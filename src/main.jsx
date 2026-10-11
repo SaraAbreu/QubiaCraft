@@ -3,6 +3,23 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
 
+// Pantalla de entrada (está en index.html). Se quita cuando la app sabe si
+// hay sesión, pero se deja ver un mínimo para que la animación luzca: más
+// tiempo en la app instalada, menos en el navegador.
+const SPLASH_MIN_MS = window.matchMedia?.('(display-mode: standalone)').matches ? 1600 : 700;
+window.__qcHideSplash = () => {
+  const el = document.getElementById('splash');
+  if (!el || el.dataset.hiding) return;
+  el.dataset.hiding = '1';
+  const wait = Math.max(0, SPLASH_MIN_MS - performance.now());
+  setTimeout(() => {
+    el.classList.add('hide');
+    setTimeout(() => el.remove(), 500);
+  }, wait);
+};
+// Por si algo falla: nunca más de 6 s.
+setTimeout(() => window.__qcHideSplash(), 6000);
+
 // El aviso de "Instalar app" llega una sola vez y muy pronto: lo guardamos
 // para que el botón de instalar (InstallApp.jsx) lo use cuando quiera.
 window.addEventListener('beforeinstallprompt', e => {
