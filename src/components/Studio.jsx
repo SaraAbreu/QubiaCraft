@@ -363,6 +363,11 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     try {
       const form = new FormData();
       for (const f of await framedFiles(false)) form.append('images', f);
+      // Copias pequeñas solo para que la IA las vea (gasta muchos menos tokens).
+      for (const it of items.slice(0, 3)) {
+        const small = await renderFramed(it.url, { ...frame, ratio: ratioInfo.value, focus: it.focus }, 640, 0.8);
+        form.append('aiImages', new File([small], 'ia.jpg', { type: 'image/jpeg' }));
+      }
       // «Otras versiones»: se reescribe la misma publicación, no se crea otra.
       if (jobId && !result) form.append('id', String(jobId));
       const keyAtGeneration = baseFrameKey;

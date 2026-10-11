@@ -53,14 +53,34 @@ function removeCJK(text = '') {
 }
 
 const __file = path.dirname(fileURLToPath(import.meta.url));
+
+// Llamada a Groq. Si devuelve 429 (límite por minuto del plan gratuito),
+// espera lo que pide Groq (máx. 30 s) y reintenta una vez. Si vuelve a
+// fallar, lanza un error con busy=true para dar un mensaje claro.
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROQ_BUSY_MSG = 'La IA está muy solicitada en este momento. Espera un minuto y vuelve a intentarlo.';
+async function groqChat(payload) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await axios.post(GROQ_URL, payload, {
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' }
+      });
+    } catch (err) {
+      if (err.response?.status !== 429) throw err;
+      if (attempt > 0) { const e = new Error('Groq: límite de uso alcanzado'); e.busy = true; throw e; }
+      const m = String(err.response?.data?.error?.message || '').match(/try again in ([\d.]+)s/i);
+      const wait = Math.min(Math.ceil(m ? parseFloat(m[1]) : 10) + 1, 30);
+      console.warn(`[groq] Límite por minuto alcanzado; reintento en ${wait}s`);
+      await new Promise(r => setTimeout(r, wait * 1000));
+    }
+  }
+}
 async function analyzeVoice(examples) {
   const pairs = examples.map((e, i) =>
     `--- Par ${i + 1} ---\nOriginal IA:\n${e.original}\n\nEditado por el usuario:\n${e.final}`
   ).join('\n\n');
 
-  const response = await axios.post(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
+  const response = await groqChat({
       model: GROQ_VISION_MODEL,
       ...groqReasoningOpts(),
       messages: [SPANISH_ONLY, {
@@ -72,9 +92,7 @@ ${pairs}
 Responde SOLO con una lista numerada de 4-5 patrones concisos y específicos en español. Ejemplos de buenas respuestas: "Prefiere frases de máximo 10 palabras", "Siempre incluye el número de teléfono en el CTA", "Evita los signos de exclamación", "Usa tuteo informal". Sin introducción ni conclusión.`
       }],
       max_tokens: 300
-    },
-    { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
-  );
+    });
 
   return removeCJK(stripThinking(response.data.choices[0].message.content));
 }
@@ -270,7 +288,9 @@ const AI_LIMIT_MSG = 'Has usado mucho la IA en la última hora. Espera un rato y
 
 // ─── API: Generar caption con Groq Vision ────────────────────────────────────
 // Acepta una imagen ('image', compatibilidad) o varias ('images', carrusel).
-const uploadImages = upload.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]);
+// aiImages: copias pequeñas (≈640 px) que manda el Estudio solo para que la IA
+// las vea: gastan muchos menos tokens que las fotos a tamaño completo.
+const uploadImages = upload.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }, { name: 'aiImages', maxCount: 3 }]);
 // Groq admite como máximo 3 imágenes por petición: la IA ve las 3 primeras.
 const MAX_VISION_IMAGES = 3;
 
@@ -283,7 +303,8 @@ app.post('/api/generate', uploadImages, async (req, res) => {
     if (aiQuotaExceeded(uid, 'generate')) return res.status(429).json({ error: AI_LIMIT_MSG });
     const [profile, voice] = await Promise.all([repo.getProfile(uid), repo.getVoice(uid)]);
     const isCarousel = files.length > 1;
-    const seen = files.slice(0, MAX_VISION_IMAGES);
+    const aiFiles = (req.files?.aiImages || []).filter(f => f.mimetype?.startsWith('image/'));
+    const seen = (aiFiles.length ? aiFiles : files).slice(0, MAX_VISION_IMAGES);
     const imageParts = seen.map(f => ({
       type: 'image_url',
       image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` }
@@ -329,11 +350,7 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
     };
 
     const callGroq = async () => {
-      const response = await axios.post(
-        'https://api.groq.com/openai/v1/chat/completions',
-        payload,
-        { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
-      );
+      const response = await groqChat(payload);
       return stripThinking(response.data.choices[0].message.content).replace(/\\#/g, '#');
     };
 
@@ -365,6 +382,7 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
     res.json({ captions: captionList, id: post.id });
   } catch (err) {
     console.error('Error en /api/generate:', err.response?.data || err.message);
+    if (err.busy) return res.status(503).json({ error: GROQ_BUSY_MSG });
     res.status(500).json({ error: 'Error generando caption', detail: err.message });
   }
 });
@@ -391,9 +409,7 @@ app.post('/api/headline', async (req, res) => {
   if (aiQuotaExceeded(req.user.id, 'headline')) return res.status(429).json({ error: AI_LIMIT_MSG });
   try {
     const profile = await repo.getProfile(req.user.id);
-    const response = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
+    const response = await groqChat({
         model: GROQ_VISION_MODEL,
         ...groqReasoningOpts(),
         messages: [SPANISH_ONLY, {
@@ -411,9 +427,7 @@ Escribe UN titular para poner encima de la foto: máximo 6 palabras, directo y c
         }],
         max_tokens: 40,
         temperature: 0.7
-      },
-      { headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
-    );
+      });
     const headline = removeCJK(stripThinking(response.data.choices[0].message.content))
       .split('\n').map(l => l.trim()).find(Boolean)
       ?.replace(/^["'«“]+|["'»”.]+$/g, '')
@@ -425,6 +439,7 @@ Escribe UN titular para poner encima de la foto: máximo 6 palabras, directo y c
     res.json({ headline });
   } catch (err) {
     console.error('Error en /api/headline:', err.response?.data || err.message);
+    if (err.busy) return res.status(503).json({ error: GROQ_BUSY_MSG });
     res.status(500).json({ error: 'No se pudo sugerir un titular' });
   }
 });
