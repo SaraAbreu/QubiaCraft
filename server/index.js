@@ -444,6 +444,48 @@ Escribe UN titular para poner encima de la foto: máximo 6 palabras, directo y c
   }
 });
 
+// ─── API: Sugerencia de música para una historia ────────────────────────────
+// La API de Instagram no permite añadir música: se termina en la app. La IA
+// mira la foto y propone el ambiente y qué buscar en el sticker de Música.
+app.post('/api/music-suggestion', async (req, res) => {
+  const image = typeof req.body?.image === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(req.body.image) && req.body.image.length < 1_500_000
+    ? req.body.image : null;
+  if (!image) return res.status(400).json({ error: 'Falta la imagen' });
+  if (aiQuotaExceeded(req.user.id, 'headline')) return res.status(429).json({ error: AI_LIMIT_MSG });
+  try {
+    const profile = await repo.getProfile(req.user.id);
+    const response = await groqChat({
+      model: GROQ_VISION_MODEL,
+      ...groqReasoningOpts(),
+      messages: [SPANISH_ONLY, {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: image } },
+          { type: 'text', text: `${profileContext(profile)}Esta imagen va a ser una historia de Instagram de esta marca y se le añadirá música con el sticker de Música de Instagram (cuenta de empresa: biblioteca de música libre de derechos).
+
+Responde SOLO con este formato, sin nada más:
+AMBIENTE: <el ambiente musical en 2-5 palabras, p. ej. "acústico cálido y tranquilo">
+BUSCAR: <término 1> | <término 2> | <término 3>
+
+Los términos de búsqueda son géneros o estados de ánimo cortos (1-3 palabras) que funcionen en el buscador de música de Instagram, en español o inglés (p. ej. "lofi", "acoustic", "chill", "cinematic", "jazz suave"). No inventes títulos de canciones.` },
+        ]
+      }],
+      max_tokens: 80,
+      temperature: 0.6
+    });
+    const raw = removeCJK(stripThinking(response.data.choices[0].message.content));
+    const mood = (raw.match(/AMBIENTE:\s*(.+)/i)?.[1] || '').replace(/["«»]/g, '').trim().slice(0, 60);
+    const searches = (raw.match(/BUSCAR:\s*(.+)/i)?.[1] || '')
+      .split('|').map(t => t.replace(/["«»]/g, '').trim()).filter(Boolean).slice(0, 3);
+    if (!mood && !searches.length) throw new Error('respuesta vacía');
+    res.json({ mood, searches });
+  } catch (err) {
+    console.error('Error en /api/music-suggestion:', err.response?.data || err.message);
+    if (err.busy) return res.status(503).json({ error: GROQ_BUSY_MSG });
+    res.status(500).json({ error: 'No se pudo sugerir música' });
+  }
+});
+
 // ─── API: Generar imagen con IA (Pollinations.AI, sin API key) ──────────────
 app.post('/api/generate-image', express.json(), async (req, res) => {
   if (!IMAGE_GEN_ENABLED) return res.status(403).json({ error: 'Crear imágenes con IA está en desarrollo.' });
@@ -582,7 +624,7 @@ const EDITABLE = ['pending', 'scheduled', 'error', 'rejected'];
 
 app.post('/api/publish', async (req, res) => {
   const uid = req.user.id;
-  const { id, caption, originalCaption, scheduledFor } = req.body || {};
+  const { id, caption, originalCaption, scheduledFor, manual } = req.body || {};
 
   const post = await repo.getPost(uid, id);
   if (!post) return res.status(404).json({ success: false, error: 'No se encontró la publicación' });
@@ -594,6 +636,16 @@ app.post('/api/publish', async (req, res) => {
   if (capErr) return res.status(400).json({ success: false, error: capErr });
 
   const voiceExamples = isStory ? 0 : await learnVoice(uid, originalCaption, caption);
+
+  // La terminó y publicó ella misma en Instagram (p. ej. para añadir música):
+  // solo se marca como publicada, sin enviar nada a Instagram.
+  if (manual) {
+    const done = await repo.transitionPost(uid, post.id, EDITABLE, {
+      status: 'published_demo', caption: isStory ? '' : caption, scheduledFor: null, publishedAt: new Date().toISOString(), errorDetail: null
+    });
+    if (!done) return res.status(409).json({ success: false, error: 'Esta publicación ya se está publicando' });
+    return res.json({ success: true, demo: true, manual: true, voiceExamples, message: 'Marcada como publicada desde Instagram.' });
+  }
 
   // ¿Programada para el futuro?
   if (scheduledFor) {

@@ -162,6 +162,11 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   const [originalCaption, setOriginalCaption] = useState('');
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // Historias con música: sugerencia de la IA y "terminar en Instagram"
+  const [music, setMusic] = useState(null); // { mood, searches }
+  const [suggestingMusic, setSuggestingMusic] = useState(false);
+  const [copiedTerm, setCopiedTerm] = useState('');
+  const [sharedToIg, setSharedToIg] = useState(false);
 
   // Panel 3 — publicación
   const [mode, setMode] = useState(initialSlot ? 'schedule' : 'now'); // now | schedule
@@ -227,6 +232,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
   function invalidateContent() {
     discardDraft();
+    setMusic(null);
+    setSharedToIg(false);
     setCaptions([]);
     setJobId(null);
     setResult(null);
@@ -305,6 +312,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
   function resetAll() {
     discardDraft();
+    setMusic(null);
+    setSharedToIg(false);
     items.forEach(it => URL.revokeObjectURL(it.url));
     setItems([]);
     setActiveIdx(0);
@@ -440,7 +449,48 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     }
   }
 
-  async function submitPublish() {
+  // Imagen pequeña de la primera foto tal y como se verá (con diseño), en data URL.
+  async function firstPreviewDataUrl() {
+    const overlay = designActive && appliesTo(design, 0) ? (ctx, W, H) => drawDesign(ctx, W, H, design, brand) : null;
+    const blob = await renderFramed(items[0].url, { ...frame, ratio: ratioInfo.value, focus: items[0].focus, overlay }, 512, 0.8);
+    return new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsDataURL(blob); });
+  }
+
+  async function suggestMusic() {
+    if (!items.length) return;
+    setSuggestingMusic(true);
+    setPubError('');
+    try {
+      const res = await fetch('/api/music-suggestion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: await firstPreviewDataUrl() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'No se pudo sugerir música');
+      setMusic(data);
+    } catch (err) {
+      setPubError(err.message);
+    } finally {
+      setSuggestingMusic(false);
+    }
+  }
+
+  async function copyTerm(t) {
+    try {
+      await navigator.clipboard.writeText(t);
+      setCopiedTerm(t);
+      setTimeout(() => setCopiedTerm(''), 1800);
+    } catch { /* sin portapapeles */ }
+  }
+
+  // Abre el menú de compartir (móvil) para llevarla a Instagram y ponerle música allí.
+  async function finishInInstagram() {
+    await downloadPhotos();
+    setSharedToIg(true);
+  }
+
+  async function submitPublish(opts = {}) {
     if (isStory ? !items.length : (!jobId || !caption.trim())) return;
     setPublishing(true);
     setPubError('');
@@ -469,7 +519,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
         setGeneratedFrameKey(frameKey);
       }
       const body = { id, caption: isStory ? '' : caption, originalCaption };
-      if (mode === 'schedule') {
+      if (opts.manual) body.manual = true;
+      else if (mode === 'schedule') {
         if (!scheduledFor) { setPubError('Elige una fecha y hora para programar'); setPublishing(false); return; }
         body.scheduledFor = new Date(scheduledFor).toISOString();
       }
@@ -978,9 +1029,45 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                   </div>
                 )}
 
+                {isStory && (
+                  <div className="sx-music">
+                    <div className="sx-music-head"><Icon name="music" size={15} /> <strong>¿Con música?</strong></div>
+                    <p className="sx-hint">Instagram no deja añadir música desde otras apps. Ábrela en Instagram, pon el sticker de Música y publícala desde allí.</p>
+                    {music ? (
+                      <div className="sx-music-tip">
+                        {music.mood && <p>Ambiente: <strong>{music.mood}</strong></p>}
+                        {music.searches?.length > 0 && (
+                          <>
+                            <div className="sx-tool-row">
+                              {music.searches.map(t => (
+                                <button key={t} className="sx-chip sx-chip-sm" onClick={() => copyTerm(t)} title="Copiar para pegarlo en el buscador de Música">
+                                  <Icon name={copiedTerm === t ? 'check' : 'copy'} size={12} /> {copiedTerm === t ? 'Copiado' : t}
+                                </button>
+                              ))}
+                            </div>
+                            <p className="sx-hint">Toca un término para copiarlo y pégalo en el buscador del sticker de Música.</p>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <button className="sx-link" onClick={suggestMusic} disabled={!items.length || suggestingMusic}>
+                        {suggestingMusic ? <span className="spinner" /> : <Icon name="sparkle" size={14} />} Sugerir música para esta historia
+                      </button>
+                    )}
+                    <button className="sx-secondary sx-music-go" onClick={finishInInstagram} disabled={!items.length || downloading}>
+                      {downloading ? <><span className="spinner" /> Preparando…</> : <><Icon name="instagram" size={15} /> Terminar en Instagram con música</>}
+                    </button>
+                    {sharedToIg && (
+                      <button className="sx-link" onClick={() => submitPublish({ manual: true })} disabled={publishing}>
+                        <Icon name="check" size={14} /> Ya la publiqué en Instagram
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {pubError && <div className="inline-error">{pubError}</div>}
 
-                <button className="sx-primary" onClick={submitPublish} disabled={isStory ? (!items.length || publishing) : (!jobId || !caption.trim() || publishing)}>
+                <button className="sx-primary" onClick={() => submitPublish()} disabled={isStory ? (!items.length || publishing) : (!jobId || !caption.trim() || publishing)}>
                   {publishing
                     ? <><span className="spinner" /> Enviando…</>
                     : mode === 'schedule'

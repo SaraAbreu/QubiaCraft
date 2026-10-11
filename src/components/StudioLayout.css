@@ -166,3 +166,13 @@
 .sx-kind { margin-bottom: 2px; }
 .sx-post-story { position: absolute; left: 6px; bottom: 6px; padding: 1px 7px; font-size: 10px; font-weight: 700; letter-spacing: .03em; color: #1a1206; background: var(--accent); border-radius: 999px; }
 .tpl-aviso::after { left: 10%; right: 10%; bottom: 12%; height: 30%; border-radius: 4px; background: var(--ts); box-shadow: inset 0 6px 0 -2px var(--tp); opacity: .92; }
+
+/* Historias: terminar en Instagram con música */
+.sx-music { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg3); }
+.sx-music-head { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--text); }
+.sx-music-head .icon { color: var(--accent); }
+.sx-music .sx-hint { margin: 0; }
+.sx-music-tip p { font-size: 13px; color: var(--text2); margin-bottom: 6px; }
+.sx-music-tip strong { color: var(--text); }
+.sx-music-go { width: 100%; }
+.sx-music .sx-link { align-self: flex-start; }
