@@ -68,7 +68,7 @@ const toLocalInput = iso => {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 };
 
-export default function Studio({ onOpenSettings, initialSlot }) {
+export default function Studio({ onOpenSettings, initialSlot, initialIdea }) {
   const [profile, setProfile] = useState(null);
   const [verticals, setVerticals] = useState([]);
   const [igStatus, setIgStatus] = useState(null);
@@ -88,13 +88,21 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   const [frame, setFrame] = useState(DEFAULT_FRAME);
   const [generatedFrameKey, setGeneratedFrameKey] = useState(null);
   // Publicación (feed/carrusel) o historia (9:16, sin texto).
-  const [kind, setKind] = useState('feed');
+  const [kind, setKind] = useState(initialIdea?.kind === 'story' ? 'story' : 'feed');
+  const [ideaOpen, setIdeaOpen] = useState(!!initialIdea);
   const isStory = kind === 'story';
   const ratioInfo = isStory ? { value: STORY_RATIO, adjusted: false } : resolveRatio(frame.ratio, items[0]);
   const baseFrameKey = JSON.stringify({ ...frame, r: ratioInfo.value, f: items.map(it => it.focus) });
 
   // Diseño (plantilla) que se dibuja encima de las fotos.
-  const [design, setDesign] = useState(loadDesign);
+  // Si venimos de una idea de fecha clave, la plantilla y el titular ya vienen puestos.
+  const [design, setDesign] = useState(() => {
+    const d = loadDesign();
+    if (!initialIdea) return d;
+    const tpl = TEMPLATES.some(t => t.key === initialIdea.template) ? initialIdea.template : d.template;
+    const headline = initialIdea.template === 'oferta' ? '' : (initialIdea.headline || '');
+    return { ...d, template: tpl, headline, scope: DEFAULT_SCOPE[tpl] || d.scope };
+  });
   const [suggesting, setSuggesting] = useState(false);
   const brand = useMemo(() => brandOf(profile), [profile]);
   const designActive = design.template !== 'none' && hasContent(design, brand);
@@ -682,6 +690,23 @@ export default function Studio({ onOpenSettings, initialSlot }) {
           )}
         </div>
       </header>
+
+      {/* ── Idea de una fecha clave (desde Estrategia) ── */}
+      {initialIdea && ideaOpen && (
+        <div className="sx-idea">
+          <span className="sx-idea-icon"><Icon name="calendar" size={18} /></span>
+          <div>
+            <strong>Idea para {initialIdea.dateName}</strong>
+            <p>{initialIdea.idea}</p>
+            <small>
+              {initialIdea.kind === 'story' ? 'Historia' : initialIdea.carousel ? 'Carrusel: sube varias fotos' : 'Publicación'}
+              {initialSlot ? ` · se programará para el ${new Date(initialSlot).toLocaleString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : ''}
+              {' · '}Sube tus fotos para empezar.
+            </small>
+          </div>
+          <button className="sx-icon-btn" onClick={() => setIdeaOpen(false)} title="Ocultar"><Icon name="x" size={16} /></button>
+        </div>
+      )}
 
       {/* ── Pasos ── */}
       <ol className="sx-steps" aria-label="Pasos">

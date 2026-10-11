@@ -811,7 +811,17 @@ app.get('/api/strategy', async (req, res) => {
     publish: s.publish,
     avoid: s.avoid,
     nextSlots: nextSlots(s, posts, tz),
-    keyDates: upcomingKeyDates(vertical.key),
+    keyDates: upcomingKeyDates(vertical.key).map(k => {
+      // Horas propuestas para publicar: el mismo día o unos días antes, a la
+      // mejor hora del sector (en la zona del público).
+      const at = (iso, minus) => {
+        const [y, m, d] = iso.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d) - minus * 86400000);
+        const t = zonedToUtc(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate(), s.hours[0], tz);
+        return t.getTime() > now + 30 * 60000 ? t.toISOString() : null;
+      };
+      return { ...k, slotDay: at(k.date, 0), slotBefore: at(k.date, Math.min(3, k.daysLeft)) };
+    }),
     activity: {
       publishedLast30: last30.length,
       publishedLast7: last7,
@@ -823,6 +833,66 @@ app.get('/api/strategy', async (req, res) => {
       targetPerWeek: 3,
     },
   });
+});
+
+// ─── API: Ideas de contenido para una fecha clave ────────────────────────────
+// La IA propone 3 publicaciones concretas para ese negocio y esa fecha.
+// Se guardan un día en memoria para no gastar IA cada vez que se abre.
+const ideaCache = new Map();
+const PLANTILLAS = ['titular', 'oferta', 'aviso', 'marca', 'none'];
+app.post('/api/key-date-ideas', async (req, res) => {
+  const uid = req.user.id;
+  const date = String(req.body?.date || '').slice(0, 10);
+  const name = String(req.body?.name || '').slice(0, 60).trim();
+  const base = String(req.body?.idea || '').slice(0, 200).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !name) return res.status(400).json({ error: 'Fecha no válida' });
+  const key = `${uid}|${date}|${name}`;
+  const hit = ideaCache.get(key);
+  if (hit && Date.now() - hit.at < 24 * 3600 * 1000 && !req.body?.refresh) return res.json({ ideas: hit.ideas });
+  if (aiQuotaExceeded(uid, 'headline')) return res.status(429).json({ error: AI_LIMIT_MSG });
+  try {
+    const profile = await repo.getProfile(uid);
+    const response = await groqChat({
+      model: GROQ_VISION_MODEL,
+      ...groqReasoningOpts(),
+      messages: [SPANISH_ONLY, {
+        role: 'user',
+        content: `${profileContext(profile)}Fecha clave: ${name} (${date}). Enfoque general: ${base || '—'}.
+
+Propón 3 ideas de contenido para Instagram de ESTE negocio para esa fecha, concretas y realistas (que pueda hacer con su móvil y sus productos o servicios). Varía el formato. Evita el oportunismo y los tópicos.
+
+Responde SOLO con 3 líneas, sin nada más, con este formato exacto:
+IDEA: <Publicación|Carrusel|Historia> | <antes|el día> | <titular de máximo 6 palabras, sin emojis ni hashtags> | <qué fotografiar o mostrar y qué contar, 1-2 frases> | <plantilla: titular|oferta|aviso|marca|ninguna>`
+      }],
+      max_tokens: 400,
+      temperature: 0.8
+    });
+    const raw = removeCJK(stripThinking(response.data.choices[0].message.content));
+    const ideas = raw.split('\n')
+      .map(l => l.replace(/^\s*(?:\d+[.)]\s*)?IDEA:\s*/i, '').trim())
+      .filter(l => l.split('|').length >= 4)
+      .slice(0, 3)
+      .map(l => {
+        const [formato, cuando, titular, idea, plantilla] = l.split('|').map(x => x.trim().replace(/^["«]|["»]$/g, ''));
+        const f = /historia/i.test(formato) ? 'Historia' : /carrusel/i.test(formato) ? 'Carrusel' : 'Publicación';
+        const tpl = (plantilla || '').toLowerCase().replace('ninguna', 'none');
+        return {
+          format: f,
+          when: /antes/i.test(cuando) ? 'antes' : 'dia',
+          headline: (titular || '').replace(/#\S+/g, '').replace(/\p{Extended_Pictographic}/gu, '').trim().slice(0, 60),
+          idea: (idea || '').slice(0, 280),
+          template: PLANTILLAS.includes(tpl) ? tpl : 'titular',
+        };
+      })
+      .filter(i => i.idea);
+    if (!ideas.length) throw new Error('respuesta vacía');
+    ideaCache.set(key, { at: Date.now(), ideas });
+    res.json({ ideas });
+  } catch (err) {
+    console.error('Error en /api/key-date-ideas:', err.response?.data || err.message);
+    if (err.busy) return res.status(503).json({ error: GROQ_BUSY_MSG });
+    res.status(500).json({ error: 'No se pudieron generar ideas' });
+  }
 });
 
 // Dónde está el público principal: las horas recomendadas son de esa zona.

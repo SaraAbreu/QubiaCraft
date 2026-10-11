@@ -49,8 +49,44 @@ function Ring({ value, target }) {
   );
 }
 
-export default function Strategy({ onUseSlot, onOpenSettings }) {
+const FORMAT_ICON = { 'Publicación': 'images', 'Carrusel': 'layers', 'Historia': 'clock' };
+
+export default function Strategy({ onUseSlot, onUseIdea, onOpenSettings }) {
   const [data, setData] = useState(null);
+  // Ideas de la IA por fecha clave: { [clave]: { loading, error, list } }
+  const [ideas, setIdeas] = useState({});
+
+  async function loadIdeas(k, refresh = false) {
+    const id = k.date + k.name;
+    setIdeas(m => ({ ...m, [id]: { ...(m[id] || {}), loading: true, error: '' } }));
+    try {
+      const res = await fetch('/api/key-date-ideas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: k.date, name: k.name, idea: k.idea, refresh })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'No se pudieron generar ideas');
+      setIdeas(m => ({ ...m, [id]: { loading: false, error: '', list: d.ideas } }));
+    } catch (err) {
+      setIdeas(m => ({ ...m, [id]: { ...(m[id] || {}), loading: false, error: err.message } }));
+    }
+  }
+
+  function useIdea(k, it) {
+    const slot = (it.when === 'antes' ? k.slotBefore : k.slotDay) || k.slotDay || k.slotBefore || null;
+    onUseIdea?.({
+      key: `${k.date}-${k.name}-${it.headline}`,
+      dateName: k.name,
+      date: k.date,
+      slot,
+      kind: it.format === 'Historia' ? 'story' : 'feed',
+      carousel: it.format === 'Carrusel',
+      template: it.template,
+      headline: it.headline,
+      idea: it.idea,
+    });
+  }
   const [error, setError] = useState('');
 
   const load = () =>
@@ -227,6 +263,43 @@ export default function Strategy({ onUseSlot, onOpenSettings }) {
             </div>
           ) : (
             <p className="strategy-muted">No hay fechas especiales de tu sector en los próximos 60 días.</p>
+          )}
+
+          {data.keyDates.length > 0 && (
+            <div className="kd-list">
+              {data.keyDates.map(k => {
+                const id = k.date + k.name;
+                const st = ideas[id] || {};
+                return (
+                  <div key={id} className="kd-item">
+                    <div className="kd-head">
+                      <div>
+                        <strong>{k.name}</strong>
+                        <span className="kd-date">{fmtDay(k.date)} · {k.daysLeft === 0 ? 'hoy' : `en ${k.daysLeft} días`}</span>
+                      </div>
+                      <button className="kd-btn" onClick={() => loadIdeas(k, !!st.list)} disabled={st.loading}>
+                        {st.loading ? <span className="spinner" /> : <Icon name={st.list ? 'refresh' : 'sparkle'} size={14} />}
+                        {st.list ? 'Otras ideas' : 'Ideas para mi negocio'}
+                      </button>
+                    </div>
+                    <p className="kd-base">{k.idea}. <span>Tenlo listo el {fmtDay(k.prepareBy)}.</span></p>
+                    {st.error && <p className="kd-error">{st.error}</p>}
+                    {st.list && (
+                      <div className="kd-ideas">
+                        {st.list.map((it, j) => (
+                          <div key={j} className="kd-idea">
+                            <span className="kd-format"><Icon name={FORMAT_ICON[it.format] || 'images'} size={13} /> {it.format} · {it.when === 'antes' ? 'unos días antes' : 'el mismo día'}</span>
+                            {it.headline && <strong className="kd-title">{it.headline}</strong>}
+                            <p>{it.idea}</p>
+                            <button className="kd-create" onClick={() => useIdea(k, it)}><Icon name="plus" size={14} /> Crear</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </section>
       </div>

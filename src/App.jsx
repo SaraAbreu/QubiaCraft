@@ -37,6 +37,8 @@ export default function App() {
   const [historyKey, setHistoryKey] = useState(0);
   // Hueco elegido en Estrategia → el Estudio abre en modo programar con esa fecha
   const [slot, setSlot] = useState(null);
+  // Idea elegida en Estrategia (fecha clave) → el Estudio la abre preparada
+  const [idea, setIdea] = useState(null);
 
   useEffect(() => {
     fetch('/api/auth/config').then(r => r.json()).then(c => setSignupOpen(c.signupOpen !== false)).catch(() => {});
@@ -58,7 +60,7 @@ export default function App() {
 
   function navigate(key) {
     if (key === 'history') setHistoryKey(k => k + 1);
-    if (key !== 'studio') setSlot(null);
+    if (key !== 'studio') { setSlot(null); setIdea(null); }
     setScreen(key);
   }
 
@@ -103,10 +105,11 @@ export default function App() {
         )}
         <main className="app-main">
           <InstallApp variant="banner" />
-          {screen === 'studio' && <Studio key={slot || 'studio'} initialSlot={slot} onOpenSettings={() => navigate('settings')} />}
+          {screen === 'studio' && <Studio key={idea?.key || slot || 'studio'} initialSlot={slot} initialIdea={idea} onOpenSettings={() => navigate('settings')} />}
           {screen === 'strategy' && (
             <Strategy
-              onUseSlot={iso => { setSlot(iso); setScreen('studio'); }}
+              onUseSlot={iso => { setIdea(null); setSlot(iso); setScreen('studio'); }}
+              onUseIdea={it => { setIdea(it); setSlot(it.slot); setScreen('studio'); window.scrollTo(0, 0); }}
               onOpenSettings={() => navigate('settings')}
             />
           )}
