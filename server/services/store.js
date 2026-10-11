@@ -13,7 +13,7 @@ const IMAGES_DIR = path.join(DATA_DIR, 'images');
 
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
-const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4' };
 const MIME_BY_EXT = Object.fromEntries(Object.entries(EXT_BY_MIME).map(([m, e]) => [e, m]));
 
 // Guarda una imagen recibida como Buffer y devuelve el nombre de archivo.

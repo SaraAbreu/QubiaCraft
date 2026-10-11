@@ -155,16 +155,18 @@ export async function refreshIfNeeded(c) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Espera a que Meta termine de procesar un contenedor (normalmente inmediato).
-async function waitForContainer(creationId, token) {
-  for (let i = 0; i < 15; i++) {
+// Las imágenes tardan segundos; los vídeos pueden tardar un par de minutos.
+async function waitForContainer(creationId, token, tries = 15) {
+  for (let i = 0; i < tries; i++) {
     const st = await axios.get(`${GRAPH}/${API_VERSION}/${creationId}`, {
       params: { fields: 'status_code', access_token: token },
     });
     const code = st.data.status_code;
     if (code === 'FINISHED' || !code) return;
-    if (code === 'ERROR' || code === 'EXPIRED') throw new Error(`Meta no pudo procesar la imagen (${code})`);
-    await sleep(2000);
+    if (code === 'ERROR' || code === 'EXPIRED') throw new Error(`Meta no pudo procesar el archivo (${code})`);
+    await sleep(tries > 15 ? 4000 : 2000);
   }
+  throw new Error('Meta está tardando demasiado en procesar el archivo; inténtalo de nuevo en unos minutos');
 }
 
 function requireConnection(c) {
@@ -189,14 +191,15 @@ export async function publishImage(conn, imageUrl, caption) {
 }
 
 // Historia (story) con una imagen. Las historias no llevan caption.
-export async function publishStory(conn, imageUrl) {
+export async function publishStory(conn, mediaUrl) {
   const c = requireConnection(conn);
   const base = `${GRAPH}/${API_VERSION}/${c.igUserId}`;
+  const isVideo = /\.mp4$/i.test(mediaUrl);
   const container = await axios.post(`${base}/media`, null, {
-    params: { media_type: 'STORIES', image_url: imageUrl, access_token: c.accessToken },
+    params: { media_type: 'STORIES', [isVideo ? 'video_url' : 'image_url']: mediaUrl, access_token: c.accessToken },
   });
   const creationId = container.data.id;
-  await waitForContainer(creationId, c.accessToken);
+  await waitForContainer(creationId, c.accessToken, isVideo ? 45 : 15);
   const pub = await axios.post(`${base}/media_publish`, null, {
     params: { creation_id: creationId, access_token: c.accessToken },
   });

@@ -18,6 +18,7 @@ import { initDb } from './db.js';
 import { hasLegacyData, migrateLegacyInto } from './services/legacy.js';
 import { startScheduler } from './services/scheduler.js';
 import * as mailer from './services/mailer.js';
+import { ffmpegAvailable, toInstagramMp4 } from './services/video.js';
 import * as ig from './services/instagram.js';
 import crypto from 'crypto';
 
@@ -187,7 +188,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 // Funciones que se activan desde el .env. Crear imágenes con IA consume
 // saldo de Pollinations: queda "en desarrollo" hasta IMAGE_GEN_ENABLED=true.
 const IMAGE_GEN_ENABLED = process.env.IMAGE_GEN_ENABLED === 'true';
-app.get('/api/features', (req, res) => res.json({ imageGen: IMAGE_GEN_ENABLED }));
+app.get('/api/features', async (req, res) => res.json({ imageGen: IMAGE_GEN_ENABLED, videoStories: await ffmpegAvailable() }));
 
 // ─── API: Cuentas (registro, login, sesión) ─────────────────────────────────
 app.get('/api/auth/config', (req, res) => res.json(auth.signupConfig()));
@@ -398,6 +399,41 @@ app.post('/api/stories', uploadImages, async (req, res) => {
   res.json({ id: post.id });
 });
 
+// ─── API: Historia animada (vídeo grabado en el navegador → MP4) ─────────────
+const uploadVideo = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } })
+  .fields([{ name: 'video', maxCount: 1 }, { name: 'audio', maxCount: 1 }]);
+let videoBusy = 0; // el VPS es pequeño: como mucho 2 conversiones a la vez
+app.post('/api/stories/video', uploadVideo, async (req, res) => {
+  if (!(await ffmpegAvailable())) return res.status(503).json({ error: 'Las historias animadas no están disponibles en este servidor (falta ffmpeg).' });
+  const video = req.files?.video?.[0];
+  const audio = req.files?.audio?.[0];
+  if (!video || !/^video\//.test(video.mimetype)) return res.status(400).json({ error: 'No se recibió el vídeo' });
+  if (audio && !/^audio\/|^video\/(mp4|webm)$/.test(audio.mimetype)) return res.status(400).json({ error: 'El audio debe ser MP3, M4A, WAV u OGG' });
+  if (videoBusy >= 2) return res.status(503).json({ error: 'Se están preparando otros vídeos. Inténtalo en un minuto.' });
+  videoBusy++;
+  const t0 = Date.now();
+  try {
+    const mp4 = await toInstagramMp4(video, audio, req.body?.duration);
+    const uid = req.user.id;
+    const file = saveImage(uid, mp4, 'video/mp4');
+    const prev = req.body?.id ? await repo.getPost(uid, req.body.id) : null;
+    let post;
+    if (prev && prev.status === 'pending' && prev.kind === 'story') {
+      post = await repo.updatePost(uid, prev.id, { imageFiles: [file] });
+      deleteImages(prev.imageFiles.filter(f => f !== file));
+    } else {
+      post = await repo.createPost(uid, { caption: '', imageFiles: [file], status: 'pending', kind: 'story' });
+    }
+    console.log(`[video] Historia animada lista en ${((Date.now() - t0) / 1000).toFixed(1)} s (${(mp4.length / 1048576).toFixed(1)} MB)`);
+    res.json({ id: post.id, url: `/api/images/${file}` });
+  } catch (err) {
+    console.error('[video] Error convirtiendo:', err.message);
+    res.status(500).json({ error: 'No se pudo preparar el vídeo. Prueba otra vez o usa la foto fija.' });
+  } finally {
+    videoBusy--;
+  }
+});
+
 // ─── API: Titular corto para la plantilla "Titular" ──────────────────────────
 // Con texto: a partir del caption. Sin texto (historias): mirando la foto
 // (image: data URL JPEG pequeña).
@@ -565,7 +601,7 @@ async function doPublish(post) {
       success: true,
       demo: true,
       message: isStory
-      ? 'Lista para publicar. Descarga la imagen y súbela como historia desde Instagram.'
+      ? `Lista para publicar. Descarga ${/\.mp4$/i.test(files[0] || '') ? 'el vídeo' : 'la imagen'} y súbela como historia desde Instagram.`
       : 'Lista para publicar. Descarga las fotos y copia el texto para subirla a Instagram.'
     };
     patch = { status: 'published_demo', publishedAt: new Date().toISOString(), errorDetail: null };
@@ -932,6 +968,7 @@ function publicItem(p) {
     caption: p.caption,
     status: p.status,
     image: p.imageFiles[0] ? `/api/images/${p.imageFiles[0]}` : null,
+    isVideo: /\.mp4$/i.test(p.imageFiles[0] || ''),
     images: p.imageFiles.map(f => `/api/images/${f}`),
     scheduledFor: p.scheduledFor,
     publishedAt: p.publishedAt,

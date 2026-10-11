@@ -68,7 +68,9 @@ export default function History() {
                 className={`history-item card ${selected?.id === item.id ? 'selected' : ''}`}
                 onClick={() => setSelected(item)}
               >
-                <img src={item.image} alt="" className="history-thumb" />
+                {item.isVideo
+                  ? <video src={item.image} className="history-thumb" muted playsInline preload="metadata" />
+                  : <img src={item.image} alt="" className="history-thumb" />}
                 <div className="history-item-info">
                   <span className={`badge ${s.cls}`}>{s.label}</span>
                   {item.kind === 'story'
@@ -97,7 +99,9 @@ export default function History() {
             <img src={selected.image} alt="" className="detail-image" />
             {selected.images?.length > 1 && (
               <div className="detail-thumbs">
-                {selected.images.map((src, i) => <img key={src} src={src} alt={`Foto ${i + 1}`} />)}
+                {selected.images.map((src, i) => (/\.mp4$/i.test(src)
+                  ? <video key={src} src={src} controls playsInline />
+                  : <img key={src} src={src} alt={`Foto ${i + 1}`} />))}
               </div>
             )}
             <div className="detail-meta">

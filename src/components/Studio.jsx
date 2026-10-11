@@ -8,6 +8,7 @@ import './StudioLayout.css';
 import { RATIOS, BACKGROUNDS, DEFAULT_FRAME, resolveRatio, ratioLabel, renderFramed, loadImage } from '../lib/framing.js';
 import { TEMPLATES, DEFAULT_DESIGN, DEFAULT_SCOPE, brandOf, appliesTo, hasContent, drawDesign } from '../lib/templates.js';
 import DesignOverlay from './DesignOverlay.jsx';
+import { recordStory, DEFAULT_ANIM, canRecordVideo } from '../lib/animate.js';
 
 const TONOS = [
   { label: 'Inspiracional', icon: 'sparkle' },
@@ -167,6 +168,13 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   const [suggestingMusic, setSuggestingMusic] = useState(false);
   const [copiedTerm, setCopiedTerm] = useState('');
   const [sharedToIg, setSharedToIg] = useState(false);
+  // Historias animadas (vídeo)
+  const [videoOn, setVideoOn] = useState(false); // ffmpeg disponible en el servidor
+  const [animated, setAnimated] = useState(false);
+  const [anim, setAnim] = useState(DEFAULT_ANIM);
+  const [audioFile, setAudioFile] = useState(null);
+  const [video, setVideo] = useState(null); // { id, url, key }
+  const [makingVideo, setMakingVideo] = useState(null); // { phase: 'rec'|'convert', progress }
 
   // Panel 3 — publicación
   const [mode, setMode] = useState(initialSlot ? 'schedule' : 'now'); // now | schedule
@@ -183,7 +191,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     fetch('/api/profile').then(r => r.json()).then(setProfile).catch(() => setProfile({}));
     fetch('/api/instagram/status').then(r => r.json()).then(setIgStatus).catch(() => setIgStatus(null));
     fetch('/api/verticals').then(r => r.json()).then(setVerticals).catch(() => setVerticals([]));
-    fetch('/api/features').then(r => r.json()).then(f => setImageGenOn(!!f.imageGen)).catch(() => {});
+    fetch('/api/features').then(r => r.json()).then(f => { setImageGenOn(!!f.imageGen); setVideoOn(!!f.videoStories && canRecordVideo()); }).catch(() => {});
     refreshHistory();
   }, []);
 
@@ -232,6 +240,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
   function invalidateContent() {
     discardDraft();
+    setVideo(null);
     setMusic(null);
     setSharedToIg(false);
     setCaptions([]);
@@ -312,6 +321,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
   function resetAll() {
     discardDraft();
+    setVideo(null);
+    setAudioFile(null);
     setMusic(null);
     setSharedToIg(false);
     items.forEach(it => URL.revokeObjectURL(it.url));
@@ -418,14 +429,67 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   // Publicación manual (sin Instagram conectado): descarga las fotos ya
   // encuadradas. En el móvil abre el menú de compartir (guardar en la galería
   // o mandarlas directamente a Instagram); en el ordenador las descarga.
+  // ¿El vídeo ya creado corresponde a lo que hay ahora en pantalla?
+  const animKey = isStory && animated
+    ? `${frameKey}|${JSON.stringify(anim)}|${audioFile ? audioFile.name + audioFile.size : ''}|${items[0]?.url || ''}`
+    : '';
+  const videoReady = !!(video && video.key === animKey);
+
+  function setAnimatedMode(on) {
+    if (on === animated) return;
+    setAnimated(on);
+    invalidateContent();
+  }
+
+  // Graba la animación y el servidor la convierte a MP4. Devuelve { id, url }.
+  async function createVideo() {
+    setPubError('');
+    setMakingVideo({ phase: 'rec', progress: 0 });
+    try {
+      const it = items[0];
+      const blob = await recordStory(
+        { src: it.url, frame, ratio: ratioInfo.value, focus: it.focus, design, brand, withDesign: designActive, anim },
+        p => setMakingVideo({ phase: 'rec', progress: p })
+      );
+      setMakingVideo({ phase: 'convert' });
+      const form = new FormData();
+      const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+      form.append('video', new File([blob], `historia.${ext}`, { type: blob.type }));
+      if (audioFile) form.append('audio', audioFile);
+      form.append('duration', String(anim.duration));
+      if (jobId && !result) form.append('id', String(jobId));
+      const res = await fetch('/api/stories/video', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'No se pudo preparar el vídeo');
+      setJobId(data.id);
+      setGeneratedFrameKey(frameKey);
+      const v = { ...data, key: animKey };
+      setVideo(v);
+      return v;
+    } finally {
+      setMakingVideo(null);
+    }
+  }
+
+  async function makeVideoClick() {
+    try { await createVideo(); } catch (err) { setPubError(err.message); }
+  }
+
   async function downloadPhotos() {
     if (!items.length) return;
     setDownloading(true);
     setPubError('');
     try {
       const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const files = (await framedFiles()).map((f, i) =>
-        new File([f], `qubia-${stamp}-${i + 1}.jpg`, { type: 'image/jpeg' }));
+      let files;
+      if (isStory && animated) {
+        const v = videoReady ? video : await createVideo();
+        const mp4 = await (await fetch(v.url)).blob();
+        files = [new File([mp4], `qubia-historia-${stamp}.mp4`, { type: 'video/mp4' })];
+      } else {
+        files = (await framedFiles()).map((f, i) =>
+          new File([f], `qubia-${stamp}-${i + 1}.jpg`, { type: 'image/jpeg' }));
+      }
       const touch = window.matchMedia?.('(pointer: coarse)').matches;
       if (touch && navigator.canShare?.({ files })) {
         try { await navigator.share({ files }); } catch (e) { if (e.name !== 'AbortError') throw e; }
@@ -442,8 +506,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
           await new Promise(r => setTimeout(r, 350));
         }
       }
-    } catch {
-      setPubError('No se pudieron descargar las fotos');
+    } catch (err) {
+      setPubError(isStory && animated ? (err.message || 'No se pudo preparar el vídeo') : 'No se pudieron descargar las fotos');
     } finally {
       setDownloading(false);
     }
@@ -497,8 +561,13 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     try {
       let id = jobId;
       let uploadedKey = generatedFrameKey;
+      // Historia animada: el vídeo (creado ahora si no está al día).
+      if (isStory && animated) {
+        const v = videoReady ? video : await createVideo();
+        id = v.id;
+        uploadedKey = frameKey;
+      } else if (isStory && !id) {
       // Historia: no hay texto que generar; se crea al publicar con las fotos ya diseñadas.
-      if (isStory && !id) {
         const form = new FormData();
         for (const f of await framedFiles()) form.append('images', f);
         const created = await fetch('/api/stories', { method: 'POST', body: form });
@@ -686,6 +755,9 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                   <button className="sx-icon-btn" onClick={resetAll} title="Quitar todas las fotos"><Icon name="x" size={16} /></button>
                 </div>
                 <div className="ig-media sx-media">
+                  {isStory && animated && videoReady ? (
+                    <video src={video.url} className="sx-video" autoPlay loop muted playsInline style={{ aspectRatio: '9 / 16' }} />
+                  ) : (
                   <CropFrame
                     src={preview}
                     natural={activeItem}
@@ -701,6 +773,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
                       <DesignOverlay ratio={ratioInfo.value} design={design} brand={brand} />
                     )}
                   </CropFrame>
+                  )}
+                  {isStory && animated && !videoReady && <span className="sx-anim-badge"><Icon name="zap" size={12} /> Animada</span>}
                   {isCarousel && (
                     <>
                       <span className="carousel-badge">{activeIdx + 1}/{items.length}</span>
@@ -948,6 +1022,53 @@ export default function Studio({ onOpenSettings, initialSlot }) {
             {design.template !== 'none' && !designActive && (
               <p className="sx-hint">Escribe el texto y verás el diseño sobre la foto.</p>
             )}
+
+            {isStory && videoOn && (
+              <div className="sx-anim">
+                <div className="sx-seg">
+                  <button className={!animated ? 'active' : ''} onClick={() => setAnimatedMode(false)}><Icon name="images" size={14} /> Foto fija</button>
+                  <button className={animated ? 'active' : ''} onClick={() => setAnimatedMode(true)}><Icon name="zap" size={14} /> Animada (vídeo)</button>
+                </div>
+                {animated && (
+                  <>
+                    <div className="sx-tool-row">
+                      <span className="sx-tool-label">Movimiento</span>
+                      <button className={`sx-chip sx-chip-sm ${anim.zoom ? 'active' : ''}`} onClick={() => setAnim(a => ({ ...a, zoom: true }))}>Zoom lento</button>
+                      <button className={`sx-chip sx-chip-sm ${!anim.zoom ? 'active' : ''}`} onClick={() => setAnim(a => ({ ...a, zoom: false }))}>Sin zoom</button>
+                    </div>
+                    <div className="sx-tool-row">
+                      <span className="sx-tool-label">Duración</span>
+                      {[5, 7, 10].map(d => (
+                        <button key={d} className={`sx-chip sx-chip-sm ${anim.duration === d ? 'active' : ''}`} onClick={() => setAnim(a => ({ ...a, duration: d }))}>{d} s</button>
+                      ))}
+                    </div>
+                    <div className="sx-tool-row">
+                      <span className="sx-tool-label">Audio</span>
+                      {audioFile ? (
+                        <>
+                          <span className="sx-audio-name"><Icon name="music" size={13} /> {audioFile.name}</span>
+                          <button className="sx-link" onClick={() => setAudioFile(null)}>Quitar</button>
+                        </>
+                      ) : (
+                        <label className="sx-chip sx-chip-sm sx-file">
+                          <Icon name="music" size={13} /> Añadir audio
+                          <input type="file" accept="audio/*" hidden onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setAudioFile(f); }} />
+                        </label>
+                      )}
+                    </div>
+                    <p className="sx-hint">
+                      {isCarousel ? 'La animación usa la primera foto. ' : ''}
+                      Usa audio tuyo o libre de derechos. Si prefieres la música de Instagram, déjalo vacío y termínala en Instagram.
+                    </p>
+                    <button className="sx-secondary" onClick={makeVideoClick} disabled={!!makingVideo || !items.length}>
+                      {makingVideo
+                        ? <><span className="spinner" /> {makingVideo.phase === 'rec' ? `Grabando la animación… ${Math.round((makingVideo.progress || 0) * 100)} %` : 'Preparando el vídeo…'}</>
+                        : <><Icon name={videoReady ? 'refresh' : 'zap'} size={15} /> {videoReady ? 'Volver a crear el vídeo' : 'Crear vídeo y ver cómo queda'}</>}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className={`sx-card ${(isStory ? !items.length : !jobId) && !result ? 'locked' : ''}`}>
@@ -1067,9 +1188,9 @@ export default function Studio({ onOpenSettings, initialSlot }) {
 
                 {pubError && <div className="inline-error">{pubError}</div>}
 
-                <button className="sx-primary" onClick={() => submitPublish()} disabled={isStory ? (!items.length || publishing) : (!jobId || !caption.trim() || publishing)}>
+                <button className="sx-primary" onClick={() => submitPublish()} disabled={isStory ? (!items.length || publishing || !!makingVideo) : (!jobId || !caption.trim() || publishing)}>
                   {publishing
-                    ? <><span className="spinner" /> Enviando…</>
+                    ? <><span className="spinner" /> {makingVideo ? (makingVideo.phase === 'rec' ? 'Grabando la animación…' : 'Preparando el vídeo…') : 'Enviando…'}</>
                     : mode === 'schedule'
                       ? <><Icon name="calendar" size={16} /> {connected ? (isStory ? 'Programar historia' : 'Programar publicación') : 'Guardar en el calendario'}</>
                       : connected
@@ -1103,7 +1224,9 @@ export default function Studio({ onOpenSettings, initialSlot }) {
               return (
                 <button key={item.id} className="sx-post" onClick={() => setOpenPost(item)}>
                   <span className="sx-post-img">
-                    {item.image && <img src={item.image} alt="" />}
+                    {item.image && (item.isVideo
+                      ? <video src={item.image} muted playsInline preload="metadata" />
+                      : <img src={item.image} alt="" />)}
                     {item.images?.length > 1 && item.kind !== 'story' && <span className="sx-post-multi"><Icon name="layers" size={12} /></span>}
                     {item.kind === 'story' && <span className="sx-post-story">Historia</span>}
                   </span>
@@ -1121,7 +1244,9 @@ export default function Studio({ onOpenSettings, initialSlot }) {
           <div className="pa-modal" onClick={e => e.stopPropagation()}>
             <button className="pa-modal-close" onClick={() => setOpenPost(null)} title="Cerrar">✕</button>
             <div className="pa-modal-head">
-              <img src={openPost.image} alt="" />
+              {openPost.isVideo
+                ? <video src={openPost.image} controls playsInline style={{ maxWidth: '100%' }} />
+                : <img src={openPost.image} alt="" />}
               <div>
                 <span className={`status-dot ${statusMeta(openPost.status).cls}`}>{statusMeta(openPost.status).label}</span>
                 {openPost.images?.length > 1 && <p className="upcoming-date">Carrusel · {openPost.images.length} fotos</p>}

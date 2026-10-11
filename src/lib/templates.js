@@ -358,6 +358,17 @@ function drawAviso(ctx, W, H, d, brand) {
   }
 }
 
+// Punto desde el que «crece» la plantilla al animarla (historias animadas).
+export function designAnchor(design, W, H) {
+  const s = W / 1080;
+  if (design?.template === 'oferta') {
+    const D = Math.min(W, H) * 0.38;
+    return { x: W - D / 2 - 56 * s, y: D / 2 + 56 * s + safe(W, H).top };
+  }
+  if (design?.template === 'marca') return { x: W - 120 * s, y: H - safe(W, H).bottom - 120 * s };
+  return { x: W / 2, y: H / 2 };
+}
+
 // Dibuja la plantilla sobre un canvas de W×H (la foto ya está debajo, o no).
 export async function drawDesign(ctx, W, H, design, brand) {
   if (!design || design.template === 'none') return;
