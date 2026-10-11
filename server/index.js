@@ -17,6 +17,7 @@ import * as auth from './services/auth.js';
 import { initDb } from './db.js';
 import { hasLegacyData, migrateLegacyInto } from './services/legacy.js';
 import { startScheduler } from './services/scheduler.js';
+import * as mailer from './services/mailer.js';
 import * as ig from './services/instagram.js';
 import crypto from 'crypto';
 
@@ -251,6 +252,22 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true });
 });
 
+// ─── Límite de uso de la IA por usuario ──────────────────────────────────────
+// La cuota de Groq (y el saldo de Pollinations) es compartida: nadie puede
+// gastarla para todos. Contador en memoria por usuario y por hora.
+const AI_LIMITS = { generate: 40, headline: 60, image: 10 }; // por hora
+const aiUse = new Map();
+function aiQuotaExceeded(uid, kind) {
+  const key = `${uid}:${kind}`;
+  const now = Date.now();
+  const recent = (aiUse.get(key) || []).filter(t => now - t < 60 * 60 * 1000);
+  if (recent.length >= AI_LIMITS[kind]) { aiUse.set(key, recent); return true; }
+  recent.push(now);
+  aiUse.set(key, recent);
+  return false;
+}
+const AI_LIMIT_MSG = 'Has usado mucho la IA en la última hora. Espera un rato y vuelve a intentarlo.';
+
 // ─── API: Generar caption con Groq Vision ────────────────────────────────────
 // Acepta una imagen ('image', compatibilidad) o varias ('images', carrusel).
 const uploadImages = upload.fields([{ name: 'image', maxCount: 1 }, { name: 'images', maxCount: 10 }]);
@@ -263,6 +280,7 @@ app.post('/api/generate', uploadImages, async (req, res) => {
     if (!files.length) return res.status(400).json({ error: 'No se recibio imagen' });
 
     const uid = req.user.id;
+    if (aiQuotaExceeded(uid, 'generate')) return res.status(429).json({ error: AI_LIMIT_MSG });
     const [profile, voice] = await Promise.all([repo.getProfile(uid), repo.getVoice(uid)]);
     const isCarousel = files.length > 1;
     const seen = files.slice(0, MAX_VISION_IMAGES);
@@ -332,9 +350,17 @@ NO incluyas descripciones, explicaciones ni texto fuera de los separadores. Máx
     // Fallback: si el modelo no respetó el formato, devolver el texto completo como única opción
     const captionList = captions.length >= 2 ? captions : [raw.trim()];
 
-    // Guardar la publicación (pendiente) con sus imágenes
+    // Guardar la publicación (pendiente) con sus imágenes. «Otras versiones»
+    // manda el id de la que ya existe: se reutiliza en vez de crear otra.
     const imageFiles = files.map(f => saveImage(uid, f.buffer, f.mimetype));
-    const post = await repo.createPost(uid, { caption: captionList[0], imageFiles, status: 'pending' });
+    const prev = req.body?.id ? await repo.getPost(uid, req.body.id) : null;
+    let post;
+    if (prev && prev.status === 'pending' && prev.kind !== 'story') {
+      post = await repo.updatePost(uid, prev.id, { caption: captionList[0], imageFiles });
+      deleteImages(prev.imageFiles.filter(f => !imageFiles.includes(f)));
+    } else {
+      post = await repo.createPost(uid, { caption: captionList[0], imageFiles, status: 'pending' });
+    }
 
     res.json({ captions: captionList, id: post.id });
   } catch (err) {
@@ -362,6 +388,7 @@ app.post('/api/headline', async (req, res) => {
   const image = typeof req.body?.image === 'string' && /^data:image\/(jpeg|png|webp);base64,/.test(req.body.image) && req.body.image.length < 1_500_000
     ? req.body.image : null;
   if (!caption && !image) return res.status(400).json({ error: 'Genera primero el texto de la publicación' });
+  if (aiQuotaExceeded(req.user.id, 'headline')) return res.status(429).json({ error: AI_LIMIT_MSG });
   try {
     const profile = await repo.getProfile(req.user.id);
     const response = await axios.post(
@@ -405,6 +432,7 @@ Escribe UN titular para poner encima de la foto: máximo 6 palabras, directo y c
 // ─── API: Generar imagen con IA (Pollinations.AI, sin API key) ──────────────
 app.post('/api/generate-image', express.json(), async (req, res) => {
   if (!IMAGE_GEN_ENABLED) return res.status(403).json({ error: 'Crear imágenes con IA está en desarrollo.' });
+  if (aiQuotaExceeded(req.user.id, 'image')) return res.status(429).json({ error: AI_LIMIT_MSG });
   try {
     const { description } = req.body;
     if (!description || !description.trim()) {
@@ -747,17 +775,59 @@ app.post('/api/instagram/disconnect', async (req, res) => {
 });
 
 // Renovación automática de los tokens de todas las cuentas (cada 12 h).
+const WARN_BEFORE_MS = 5 * 24 * 60 * 60 * 1000; // avisar 5 días antes de caducar
 async function refreshAllTokens() {
+  let rows = [];
   try {
-    for (const row of await repo.allIgConnections()) {
+    rows = await repo.allIgConnections();
+  } catch (err) {
+    console.error('[instagram] Error leyendo conexiones:', err.message);
+    return;
+  }
+  // Cada conexión por separado: si falla una, las demás se siguen renovando.
+  for (const row of rows) {
+    try {
       const renewed = await ig.refreshIfNeeded(row.data);
       if (renewed) {
         await repo.saveIgConnection(row.user_id, renewed);
         console.log(`[instagram] Token de @${renewed.username} renovado, caduca el ${renewed.expiresAt}`);
+        continue;
       }
+      // No se pudo renovar y caduca pronto (o ya caducó): un aviso por fecha.
+      const c = row.data;
+      const left = c.expiresAt ? new Date(c.expiresAt).getTime() - Date.now() : Infinity;
+      if (left < WARN_BEFORE_MS && c.warnedFor !== c.expiresAt && mailer.mailEnabled) {
+        const user = await repo.findUserById(row.user_id);
+        if (user && await mailer.notifyInstagramExpiring(user, c.username, c.expiresAt)) {
+          await repo.saveIgConnection(row.user_id, { ...c, warnedFor: c.expiresAt });
+        }
+      }
+    } catch (err) {
+      console.error(`[instagram] Error con la conexión del usuario ${row.user_id}:`, err.message);
+    }
+  }
+}
+
+// Aviso por correo cuando una publicación programada no se pudo publicar.
+async function onScheduledFailure(post, detail) {
+  try {
+    const user = await repo.findUserById(post.userId);
+    if (user) await mailer.notifyPublishFailed(user, post, detail);
+  } catch (err) {
+    console.error('[mail] Error preparando el aviso:', err.message);
+  }
+}
+
+// Limpieza diaria de publicaciones abandonadas (y sus fotos).
+async function purgeStale() {
+  try {
+    const files = await repo.purgeStalePosts();
+    if (files.length) {
+      deleteImages(files);
+      console.log(`[limpieza] ${files.length} foto(s) de publicaciones abandonadas borradas`);
     }
   } catch (err) {
-    console.error('[instagram] Error renovando tokens:', err.message);
+    console.error('[limpieza] Error:', err.message);
   }
 }
 
@@ -964,7 +1034,10 @@ async function start() {
   });
   refreshAllTokens();
   setInterval(refreshAllTokens, 12 * 60 * 60 * 1000);
-  await startScheduler(doPublish);
+  purgeStale();
+  setInterval(purgeStale, 24 * 60 * 60 * 1000);
+  if (!mailer.mailEnabled) console.log('[mail] Avisos por correo desactivados (faltan SMTP_HOST, SMTP_USER, SMTP_PASS en el .env)');
+  await startScheduler(doPublish, { onFailure: onScheduledFailure });
 }
 
 start().catch(err => {

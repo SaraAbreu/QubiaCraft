@@ -129,6 +129,20 @@ export async function deletePost(userId, id) {
   return toPost(await one(`DELETE FROM posts WHERE id = $1 AND user_id = $2 RETURNING *`, [id, userId]));
 }
 
+// Limpieza: publicaciones que nunca se publicaron ni se programaron
+// (pendientes de más de `pendingDays` días) y las descartadas. Devuelve sus
+// imágenes para borrarlas del disco.
+export async function purgeStalePosts({ pendingDays = 14, rejectedDays = 7 } = {}) {
+  const rows = await query(
+    `DELETE FROM posts
+      WHERE (status = 'pending' AND scheduled_for IS NULL AND created_at < now() - ($1::int * interval '1 day'))
+         OR (status = 'rejected' AND created_at < now() - ($2::int * interval '1 day'))
+      RETURNING image_files`,
+    [pendingDays, rejectedDays]
+  );
+  return rows.flatMap(r => r.image_files || []);
+}
+
 // Programador: reclama de forma atómica las publicaciones vencidas.
 export async function claimDuePosts(lateMs) {
   const rows = await query(

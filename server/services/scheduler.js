@@ -8,7 +8,7 @@ import * as repo from './repo.js';
 const TICK_MS = 60 * 1000;
 let running = false;
 
-async function tick(publishFn) {
+async function tick(publishFn, onFailure) {
   if (running) return; // evita solapar pasadas si una publicación tarda
   running = true;
   try {
@@ -16,9 +16,11 @@ async function tick(publishFn) {
     for (const post of due) {
       try {
         const result = await publishFn(post);
+        if (!result?.success) onFailure?.(post, result?.detail || result?.error);
         console.log(`[scheduler] usuario ${post.userId} · post ${post.id} → ${result?.success ? 'publicado' : 'error'}${post.publishedLate ? ' (con retraso)' : ''}`);
       } catch (err) {
         await repo.updatePost(post.userId, post.id, { status: 'error', errorDetail: err.message });
+        onFailure?.(post, err.message);
         console.error(`[scheduler] Error publicando ${post.id}:`, err.message);
       }
     }
@@ -29,11 +31,12 @@ async function tick(publishFn) {
   }
 }
 
-export async function startScheduler(publishFn) {
+// onFailure(post, motivo): aviso cuando una programada no se pudo publicar.
+export async function startScheduler(publishFn, { onFailure } = {}) {
   const recovered = await repo.recoverInterrupted();
   if (recovered) console.log(`[scheduler] ${recovered} publicación(es) interrumpida(s) marcadas como error`);
   const pending = await repo.countScheduled();
   console.log(`[scheduler] Activo — revisa cada ${TICK_MS / 1000}s. Programadas en cola: ${pending}`);
-  tick(publishFn);
-  return setInterval(() => tick(publishFn), TICK_MS);
+  tick(publishFn, onFailure);
+  return setInterval(() => tick(publishFn, onFailure), TICK_MS);
 }

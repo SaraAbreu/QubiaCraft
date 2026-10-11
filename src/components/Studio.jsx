@@ -219,7 +219,14 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   }
 
   // Cualquier cambio en las fotos invalida el contenido ya generado.
+  // Una publicación preparada pero no publicada que se abandona (cambias las
+  // fotos, el tipo o empiezas de cero) se borra para que no se acumule.
+  function discardDraft() {
+    if (jobId && !result) fetch(`/api/posts/${jobId}`, { method: 'DELETE' }).catch(() => {});
+  }
+
   function invalidateContent() {
+    discardDraft();
     setCaptions([]);
     setJobId(null);
     setResult(null);
@@ -297,6 +304,7 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   }
 
   function resetAll() {
+    discardDraft();
     items.forEach(it => URL.revokeObjectURL(it.url));
     setItems([]);
     setActiveIdx(0);
@@ -355,6 +363,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
     try {
       const form = new FormData();
       for (const f of await framedFiles(false)) form.append('images', f);
+      // «Otras versiones»: se reescribe la misma publicación, no se crea otra.
+      if (jobId && !result) form.append('id', String(jobId));
       const keyAtGeneration = baseFrameKey;
       const res = await fetch('/api/generate', { method: 'POST', body: form });
       const data = await res.json();
@@ -477,11 +487,8 @@ export default function Studio({ onOpenSettings, initialSlot }) {
   async function reject() {
     if (!jobId) return;
     setPublishing(true);
-    await fetch('/api/reject', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: jobId })
-    });
+    // Descartar = borrarla (y sus fotos), no dejarla guardada como rechazada.
+    await fetch(`/api/posts/${jobId}`, { method: 'DELETE' }).catch(() => {});
     setPublishing(false);
     refreshHistory();
     resetAll();
